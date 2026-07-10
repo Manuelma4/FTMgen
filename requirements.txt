@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-multipart
+openpyxl
+pandas
+PyMuPDF
+XlsxWriter
+httpx
+python-dotenv
+opencv-python-headless
+numpy

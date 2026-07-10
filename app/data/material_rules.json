@@ -1,0 +1,76 @@
+{
+  "_doc": "Regles metier pour rapprocher les libelles du plan et du listing Excel. Les alias restent generiques; les composants servent quand un symbole du plan represente plusieurs equipements.",
+  "aliases": [
+    {
+      "article": "PC 10/16A 2P+T",
+      "materials": [
+        "Prise de courant 16A 2P+T (Encastrée)",
+        "Prise de courant 16A 2P+T",
+        "PC 10/16A 2P+T"
+      ]
+    },
+    {
+      "article": "Prise RJ45",
+      "materials": [
+        "Prise RJ45 (Encastrée)",
+        "Prise RJ45",
+        "RJ45"
+      ]
+    },
+    {
+      "article": "Attente spécifique précisée sur plan",
+      "materials": [
+        "Point d'alimentation",
+        "Point alimentation",
+        "Attente spécifique précisée sur plan"
+      ]
+    },
+    {
+      "article": "Détection de mouvement 360° et luminosité",
+      "materials": [
+        "Détection de mouvement 360° et luminosité",
+        "Détecteur de mouvement 360° et luminosité"
+      ]
+    },
+    {
+      "article": "Luminaire type 3 — Suspensions",
+      "materials": [
+        "Luminaire spot suspendu n°1",
+        "Luminaire spot suspendu n°2",
+        "Suspension"
+      ]
+    },
+    {
+      "article": "Luminaire type 4 — Dalle LED 60x60",
+      "materials": [
+        "Luminaire 600x600 n°1",
+        "Dalle LED 60x60",
+        "Dalle 600x600"
+      ]
+    },
+    {
+      "article": "Luminaire type 7 — Downlight noir ou blanc",
+      "materials": [
+        "Luminaire downlight n°1",
+        "Downlight"
+      ]
+    }
+  ],
+  "components": [
+    {
+      "article": "Poste de travail (4 PC + 1 RJ)",
+      "items": [
+        {
+          "article": "Prise de courant 16A 2P+T (Encastrée)",
+          "categorie": "Électricité",
+          "quantity": 4
+        },
+        {
+          "article": "Prise RJ45 (Encastrée)",
+          "categorie": "Électricité",
+          "quantity": 1
+        }
+      ]
+    }
+  ]
+}

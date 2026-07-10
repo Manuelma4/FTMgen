@@ -1,0 +1,51 @@
+{
+  "_doc": "Catalogue strict des symboles présents dans les boîtes de légende. Le moteur compte uniquement ces glyphes visuels, jamais les annotations libres du plan.",
+  "ELECTRICITE": {
+    "text": [],
+    "glyphs": {
+      "poste de travail: 4 pc + 1 rj": {"reference": "1", "article": "Poste de travail (4 PC + 1 RJ)", "categorie": "Courant fort"},
+      "pc 10/16a 2p+t": {"reference": "2", "article": "PC 10/16A 2P+T", "categorie": "Courant fort"},
+      "tableau divisionnaire": {"reference": "3", "article": "Tableau divisionnaire", "categorie": "Courant fort", "threshold": 0.65},
+      "attente specifique precise sur plan": {"reference": "4", "article": "Attente spécifique précisée sur plan", "categorie": "Courant fort", "threshold": 0.62},
+      "interrupteur simple allumage": {"reference": "5", "article": "Interrupteur simple allumage", "categorie": "Courant fort"},
+      "interrupteur double allumage": {"reference": "6", "article": "Interrupteur double allumage", "categorie": "Courant fort"},
+      "variateur pave led": {"reference": "7", "article": "Variateur pavé LED", "categorie": "Courant fort"},
+      "commande clim": {"reference": "8", "article": "Commande clim", "categorie": "Courant fort"},
+      "detection de mouvement 360° et luminosite": {"reference": "9", "article": "Détection de mouvement 360° et luminosité", "categorie": "Courant fort"},
+      "commande generale on - off": {"reference": "10", "article": "Commande générale ON-OFF", "categorie": "Courant fort"},
+      "prise rj45": {"reference": "11", "article": "Prise RJ45", "categorie": "Courant faible"},
+      "videophone": {"reference": "12", "article": "Vidéophone", "categorie": "Courant faible", "threshold": 0.50},
+      "attente pour camera": {"reference": "13", "article": "Attente pour caméra", "categorie": "Courant faible"}
+    }
+  },
+  "LUMINAIRE": {
+    "text": [
+      {"reference": "1", "pattern": "^1$", "article": "Luminaire type 1 — Éclairage spécifique plan de travail", "categorie": "Luminaire", "min_font_size": 14, "max_font_size": 19, "min_y": 120},
+      {"reference": "2", "pattern": "^2$", "article": "Luminaire type 2 — Spot intégré simple", "categorie": "Luminaire", "min_font_size": 14, "max_font_size": 19, "min_y": 120},
+      {"reference": "3", "pattern": "^3$", "article": "Luminaire type 3 — Suspensions", "categorie": "Luminaire", "min_font_size": 14, "max_font_size": 19, "min_y": 120},
+      {"reference": "4", "pattern": "^4$", "article": "Luminaire type 4 — Dalle LED 60x60", "categorie": "Luminaire", "min_font_size": 14, "max_font_size": 19, "min_y": 120},
+      {"reference": "5", "pattern": "^5$", "article": "Luminaire type 5 — Spot orientable", "categorie": "Luminaire", "min_font_size": 14, "max_font_size": 19, "min_y": 120},
+      {"reference": "6", "pattern": "^6$", "article": "Luminaire type 6 — Ruban LED", "categorie": "Luminaire", "min_font_size": 14, "max_font_size": 19, "min_y": 120},
+      {"reference": "7", "pattern": "^7$", "article": "Luminaire type 7 — Downlight noir ou blanc", "categorie": "Luminaire", "min_font_size": 14, "max_font_size": 19, "min_y": 120},
+      {"reference": "8", "pattern": "^8$", "article": "Luminaire type 8 — Applique", "categorie": "Luminaire", "min_font_size": 14, "max_font_size": 19, "min_y": 120}
+    ],
+    "glyphs": {
+      "eclairage specifique plan de travail": {"reference": "1", "article": "Luminaire type 1 — Éclairage spécifique plan de travail", "categorie": "Luminaire", "threshold": 0.54},
+      "spot integre simple": {"reference": "2", "article": "Luminaire type 2 — Spot intégré simple", "categorie": "Luminaire", "detector": "green_disc"},
+      "suspensions": {"reference": "3", "article": "Luminaire type 3 — Suspensions", "categorie": "Luminaire", "detector": "orange_triangle"},
+      "dalle led 60x60": {"reference": "4", "article": "Luminaire type 4 — Dalle LED 60x60", "categorie": "Luminaire", "threshold": 0.60, "template_side": "right"},
+      "spot orientable": {"reference": "5", "article": "Luminaire type 5 — Spot orientable", "categorie": "Luminaire", "detector": "green_disc_arms"},
+      "ruban led": {"reference": "6", "article": "Luminaire type 6 — Ruban LED", "categorie": "Luminaire", "threshold": 0.62},
+      "downlight noir ou blanc": {"reference": "7", "article": "Luminaire type 7 — Downlight noir ou blanc", "categorie": "Luminaire", "threshold": 0.75},
+      "applique": {"reference": "8", "article": "Luminaire type 8 — Applique", "categorie": "Luminaire", "threshold": 0.75}
+    }
+  },
+  "PLOMBERIE": {
+    "text": [],
+    "glyphs": {
+      "evacuation eu en 40": {"reference": "1", "article": "Évacuation EU Ø40", "categorie": "Plomberie"},
+      "attente eau froide": {"reference": "2", "article": "Attente eau froide", "categorie": "Plomberie"},
+      "attente eau chaude": {"reference": "3", "article": "Attente eau chaude", "categorie": "Plomberie"}
+    }
+  }
+}
