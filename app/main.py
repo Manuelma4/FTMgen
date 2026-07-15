@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import config, pipeline
+from .core import word_report
 from .extract import excel_reader
 from .services import analysis_store
 
@@ -123,6 +124,9 @@ def api_history_detail(job: str):
     output = Path(str(data.get("output", "")))
     if output.name:
         data["download"] = f"/api/download/{output.name}"
+    word_output = Path(str(data.get("word_output", "")))
+    if word_output.name and (config.OUTPUT_DIR / word_output.name).exists():
+        data["word_download"] = f"/api/download/{word_output.name}"
     _enrich_analysis_for_ui(job, data)
     return JSONResponse(data)
 
@@ -143,11 +147,13 @@ def api_download(name: str):
     path = (config.OUTPUT_DIR / name).resolve()
     if path.parent != config.OUTPUT_DIR.resolve() or not path.exists():
         raise HTTPException(404, "Fichier introuvable")
-    return FileResponse(
-        path,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=name,
-    )
+    media_types = {
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".pdf": "application/pdf",
+    }
+    return FileResponse(path, media_type=media_types.get(path.suffix.lower(), "application/octet-stream"), filename=name)
 
 
 def _job_pdf(job: str) -> Path:
@@ -277,8 +283,44 @@ def api_save_corrections(job: str, payload: dict = Body(...)):
     summary["excel_name"] = previous.get("excel_name") or excel_path.name.split("_", 1)[-1]
     summary["pdf_name"] = previous.get("pdf_name") or pdf_path.name.split("_", 1)[-1]
     summary["pdf_original"] = f"/api/jobs/{job}/pdf"
+    if previous.get("ftm_document"):
+        summary["ftm_document"] = previous["ftm_document"]
+    if previous.get("word_output"):
+        word_output = Path(str(previous["word_output"]))
+        summary["word_output"] = str(config.OUTPUT_DIR / word_output.name)
+        if (config.OUTPUT_DIR / word_output.name).exists():
+            summary["word_download"] = f"/api/download/{word_output.name}"
     analysis_path.write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
     return JSONResponse(summary)
+
+
+@app.post("/api/history/{job}/ftm")
+async def api_generate_ftm_word(job: str, payload: dict = Body(...)):
+    """Enregistre les champs contrôlés par l'utilisateur et génère le Word FTM."""
+    analysis_path = _analysis_file(job)
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    word_path = config.OUTPUT_DIR / f"FTM_{job}.docx"
+    try:
+        controlled_payload = {
+            **payload,
+            "materials_version": 2,
+            "materials": word_report.materials_detected_in_pdf(analysis, payload),
+        }
+        normalized = await run_in_threadpool(word_report.write_ftm_document, word_path, controlled_payload)
+    except Exception as exc:
+        raise HTTPException(422, f"Échec de la génération Word : {exc}") from exc
+
+    updated_at = datetime.now().isoformat(timespec="seconds")
+    analysis["ftm_document"] = normalized
+    analysis["word_output"] = str(word_path)
+    analysis["word_download"] = f"/api/download/{word_path.name}"
+    analysis["updated_at"] = updated_at
+    analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
+    return JSONResponse({
+        "ftm_document": normalized,
+        "word_download": f"/api/download/{word_path.name}",
+        "updated_at": updated_at,
+    })
 
 
 @app.post("/api/history/{job}/corrections/draft")

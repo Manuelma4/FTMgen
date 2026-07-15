@@ -9,3 +9,4 @@ httpx
 python-dotenv
 opencv-python-headless
 numpy
+python-docx

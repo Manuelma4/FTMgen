@@ -80,12 +80,55 @@ export interface CompareRow {
   ecart: number;
   statut: string;
   pages: string;
+  numero?: string;
+  niveau?: string;
+}
+
+export interface FtmMaterialRow {
+  id: string;
+  room: string;
+  material: string;
+  comparison_room?: string;
+  comparison_material?: string;
+  quantity_before: string;
+  quantity_after: string;
+  unit_price: string;
+  company_price: string;
+  market_quantity?: string;
+  additional_quantity?: string;
+}
+
+export interface FtmDocumentData {
+  project_name: string;
+  project_description: string;
+  issuer: string;
+  ftm_number: string;
+  revision: string;
+  subject: string;
+  pole: string;
+  lot: string;
+  floor: string;
+  description: string;
+  categories: Record<'architect' | 'owner' | 'program' | 'regulation' | 'technical' | 'other', boolean>;
+  category_other: string;
+  attachments: Record<'plans' | 'summary' | 'estimate' | 'other', boolean>;
+  attachment_other: string;
+  recipients: Record<'owner' | 'assistant' | 'company', boolean>;
+  architect_signatory: string;
+  assistant_signatory: string;
+  owner_signatory: string;
+  decision: '' | 'accepted' | 'refused';
+  materials_version?: number;
+  materials: FtmMaterialRow[];
 }
 
 export interface AnalysisSummary {
   job: string;
   output?: string;
   download?: string;
+  word_output?: string;
+  word_download?: string;
+  ftm_document?: FtmDocumentData;
   pdf_original?: string;
   excel_name?: string;
   pdf_name?: string;

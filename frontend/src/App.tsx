@@ -12,6 +12,7 @@ import {
   saveDraft,
 } from './api';
 import { CompareTable } from './components/CompareTable';
+import { FtmDocumentPanel } from './components/FtmDocumentPanel';
 import { HistoryPanel } from './components/HistoryPanel';
 import { ObjectInspector } from './components/ObjectInspector';
 import { PlanViewer } from './components/PlanViewer';
@@ -68,140 +69,10 @@ function normalizeAnalysis(data: AnalysisSummary): AnalysisSummary {
   };
 }
 
-function hasOwnValue(source: Record<string, string>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(source, key);
-}
-
-function normalizeSearch(value: string): string {
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-}
-
 function uniqueSorted(values: Array<string | undefined | null>): string[] {
   return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean))).sort((left, right) => (
     left.localeCompare(right, 'fr', { sensitivity: 'base' })
   ));
-}
-
-interface SearchableRelationFieldProps {
-  value?: string;
-  suggested?: string;
-  options: string[];
-  placeholder: string;
-  specialLabel: string;
-  disabled?: boolean;
-  onChange: (value: string) => void;
-}
-
-function SearchableRelationField({
-  value,
-  suggested = '',
-  options,
-  placeholder,
-  specialLabel,
-  disabled = false,
-  onChange,
-}: SearchableRelationFieldProps) {
-  const displayValue = value !== undefined ? (value === '' ? specialLabel : value) : suggested;
-  const [query, setQuery] = useState(displayValue);
-  const [open, setOpen] = useState(false);
-  const [showAll, setShowAll] = useState(false);
-
-  useEffect(() => {
-    if (!open) {
-      setQuery(displayValue);
-    }
-  }, [displayValue, open]);
-
-  const search = showAll || query === specialLabel ? '' : query.trim();
-  const normalizedSearch = normalizeSearch(search);
-  const filtered = options
-    .filter((option) => !normalizedSearch || normalizeSearch(option).includes(normalizedSearch))
-    .slice(0, 80);
-  const exact = options.some((option) => normalizeSearch(option) === normalizedSearch);
-  const canAdd = Boolean(search && !exact && normalizeSearch(suggested) !== normalizedSearch);
-
-  function choose(nextValue: string): void {
-    onChange(nextValue);
-    setQuery(nextValue === '' ? specialLabel : nextValue);
-    setOpen(false);
-    setShowAll(false);
-  }
-
-  function handleChange(nextQuery: string): void {
-    setQuery(nextQuery);
-    setShowAll(false);
-    if (nextQuery === specialLabel) {
-      onChange('');
-    } else {
-      onChange(nextQuery);
-    }
-    setOpen(true);
-  }
-
-  return (
-    <div className="combo">
-      <div className="combo-control">
-        <input
-          value={disabled ? '' : query}
-          disabled={disabled}
-          placeholder={disabled ? specialLabel : placeholder}
-          onFocus={(event) => {
-            event.currentTarget.select();
-            setOpen(true);
-            setShowAll(true);
-          }}
-          onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-          onChange={(event) => handleChange(event.target.value)}
-        />
-        <button
-          type="button"
-          disabled={disabled}
-          aria-label="Afficher les options"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => {
-            setQuery('');
-            setShowAll(true);
-            setOpen(true);
-          }}
-        >
-          ▾
-        </button>
-      </div>
-      {open && !disabled && (
-        <div className="combo-menu">
-          <span className="combo-count">
-            {options.length} option{options.length > 1 ? 's' : ''} disponible{options.length > 1 ? 's' : ''}
-          </span>
-          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose('')}>
-            {specialLabel}
-          </button>
-          {suggested && normalizeSearch(suggested) !== normalizeSearch(search) && (
-            <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(suggested)}>
-              Proposition : {suggested}
-            </button>
-          )}
-          {filtered.map((option) => (
-            <button key={option} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>
-              {option}
-            </button>
-          ))}
-          {canAdd && (
-            <button type="button" className="combo-add" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(search)}>
-              Ajouter « {search} »
-            </button>
-          )}
-          {filtered.length === 0 && !canAdd && (
-            <span>Aucune option ne correspond à la recherche</span>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export function App() {
@@ -271,51 +142,6 @@ export function App() {
       ...analysis.comparatif.filter((row) => row.quantite_avant > 0).map((row) => row.materiel),
     ]);
   }, [analysis]);
-  const roomRelations = useMemo(() => {
-    if (!analysis) return [];
-    const suggested = new Map((analysis.pieces_rapprochees || []).map((item) => [item.plan, item.maquette]));
-    const rooms = Array.from(new Set([
-      ...analysis.pieces_plan,
-      ...analysis.traceabilite.map((item) => item.room).filter(Boolean),
-    ])).sort();
-    return rooms.map((room) => ({
-      plan: room,
-      selected: hasOwnValue(roomMappings, room) ? roomMappings[room] : undefined,
-      suggested: suggested.get(room) || '',
-    }));
-  }, [analysis, roomMappings]);
-  const articleMatches = useMemo(
-    () => new Map((analysis?.articles_rapproches || []).map((item) => [item.plan, item])),
-    [analysis],
-  );
-  const articlesToValidate = useMemo(() => (
-    Array.from(new Set((analysis?.comparatif || [])
-      .filter((row) => row.statut?.startsWith('À VALIDER') && row.quantite_apres > 0)
-      .map((row) => row.materiel)
-      .filter(Boolean)))
-  ), [analysis]);
-  const materialRelations = useMemo(() => {
-    if (!analysis) return [];
-    const detectedArticles = analysis.traceabilite
-      .map((item) => item.article || item.original_article || '')
-      .filter(Boolean);
-    const componentArticles = (analysis.objets_composes || [])
-      .flatMap((rule) => rule.items.map((item) => item.article));
-    const articles = Array.from(new Set([
-      ...detectedArticles,
-      ...Array.from(articleMatches.keys()),
-      ...articlesToValidate,
-      ...componentArticles,
-    ])).sort();
-    return articles.map((article) => ({
-      article,
-      selected: hasOwnValue(materialMappings, article) ? materialMappings[article] : undefined,
-      suggested: articleMatches.get(article)?.maquette || '',
-      method: articleMatches.get(article)?.methode || '',
-      validated: validatedArticles.includes(article),
-    }));
-  }, [analysis, articleMatches, articlesToValidate, materialMappings, validatedArticles]);
-
   useEffect(() => {
     void refreshHistory();
   }, []);
@@ -659,11 +485,16 @@ export function App() {
     await recalculateWithCorrections(corrections);
   }
 
-  async function validateAllUnmatchedArticles(): Promise<void> {
-    if (articlesToValidate.length === 0) return;
-    const nextValidated = Array.from(new Set([...validatedArticles, ...articlesToValidate]));
+  async function validateAllUnmatchedArticles(articles: string[]): Promise<void> {
+    if (articles.length === 0) return;
+    const nextValidated = Array.from(new Set([...validatedArticles, ...articles]));
     setValidatedArticles(nextValidated);
     await recalculateWithCorrections(buildCorrections({ validated_articles: nextValidated }));
+  }
+
+  function handleFtmGenerated(result: Pick<AnalysisSummary, 'ftm_document' | 'word_download' | 'updated_at'>): void {
+    setAnalysis((current) => current ? { ...current, ...result } : current);
+    void refreshHistory();
   }
 
   const canRun = Boolean(excel && pdf && level);
@@ -792,96 +623,27 @@ export function App() {
                     Recalculer et refaire l’Excel
                   </button>
                   {analysis.download && <a className="button" href={analysis.download}>Télécharger Excel</a>}
+                  {analysis.word_download && <a className="button" href={analysis.word_download}>Télécharger Word</a>}
                   {analysis.pdf_original && <a className="button" href={analysis.pdf_original} target="_blank" rel="noreferrer">PDF original</a>}
                 </div>
               </section>
 
-              <section className="panel mappings-panel">
-                <div className="mappings-head">
-                  <div>
-                    <h2>Correspondances</h2>
-                    <span>{roomRelations.length} pièces · {materialRelations.length} objets</span>
-                  </div>
-                  <div className="actions">
-                    <button type="button" onClick={() => void saveRelationsDraft()}>
-                      Enregistrer les relations
-                    </button>
-                    <button type="button" className="primary" onClick={() => void applyRelations()}>
-                      Appliquer et recalculer
-                    </button>
-                    <button
-                      type="button"
-                      disabled={articlesToValidate.length === 0}
-                      onClick={() => void validateAllUnmatchedArticles()}
-                    >
-                      Valider tous les objets sans correspondance
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mappings-grid">
-                  <section className="mapping-block">
-                    <h3>Pièces du plan</h3>
-                    <div className="mapping-list">
-                      {roomRelations.map((item) => (
-                        <label className="mapping-row" key={item.plan}>
-                          <span title={item.plan}>{item.plan}</span>
-                          <SearchableRelationField
-                            value={item.selected}
-                            suggested={item.suggested}
-                            options={excelPieces}
-                            placeholder="Rechercher une pièce Excel"
-                            specialLabel="Nouvelle pièce / sans relation"
-                            onChange={(value) => updateRoomMapping(item.plan, value)}
-                          />
-                        </label>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="mapping-block">
-                    <h3>Objets détectés</h3>
-                    <div className="mapping-list">
-                      {materialRelations.map((item) => (
-                        <div className="mapping-row material-row" key={item.article}>
-                          <span title={item.article}>{item.article}</span>
-                          <SearchableRelationField
-                            value={item.selected}
-                            suggested={item.suggested}
-                            options={excelMaterials}
-                            disabled={item.validated}
-                            placeholder="Rechercher un matériel Excel"
-                            specialLabel={item.validated ? 'Validé comme ajout' : 'Sans correspondance Excel'}
-                            onChange={(value) => updateMaterialMapping(item.article, value)}
-                          />
-                          <label className="check-row validate-row">
-                            <input
-                              type="checkbox"
-                              checked={item.validated}
-                              onChange={(event) => toggleValidatedArticle(item.article, event.target.checked)}
-                            />
-                            Valider comme ajout
-                          </label>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                </div>
-
-                {(analysis.objets_composes || []).length > 0 && (
-                  <div className="component-rules">
-                    <h3>Objets composés</h3>
-                    {(analysis.objets_composes || []).map((rule) => (
-                      <div className="component-rule" key={rule.article}>
-                        <strong>{rule.article}</strong>
-                        <span>
-                          {rule.items.map((item) => `${item.quantity} × ${item.article}`).join(' · ')}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
+              <FtmDocumentPanel
+                key={analysis.job}
+                analysis={analysis}
+                excelPieces={excelPieces}
+                excelMaterials={excelMaterials}
+                roomMappings={roomMappings}
+                materialMappings={materialMappings}
+                validatedArticles={validatedArticles}
+                onRoomMappingChange={updateRoomMapping}
+                onMaterialMappingChange={updateMaterialMapping}
+                onValidatedArticleChange={toggleValidatedArticle}
+                onSaveCorrespondences={saveRelationsDraft}
+                onApplyCorrespondences={applyRelations}
+                onValidateArticles={validateAllUnmatchedArticles}
+                onGenerated={handleFtmGenerated}
+              />
 
               <section className="analysis-grid" ref={gridRef} style={gridStyle}>
                 <PlanViewer

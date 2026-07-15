@@ -2,7 +2,9 @@
 
 Application web qui compare la **maquette numérique** (listing Excel « Pièces + Matériel »)
 avec un **plan de travaux modificatifs** (PDF vectoriel) et génère un **Excel comparatif
-avant / après** par pièce, catégorie et matériel.
+avant / après** par pièce, catégorie et matériel. Après l'analyse, l'interface permet
+aussi de contrôler les informations contractuelles et de générer une **Fiche de Travaux
+Modificative au format Word**.
 
 ## Stack
 
@@ -13,6 +15,7 @@ avant / après** par pièce, catégorie et matériel.
 | Comptage symboles graphiques | OpenCV — template matching, templates auto-extraits de la légende |
 | Lecture Excel | openpyxl + pandas |
 | Rapport | XlsxWriter |
+| Fiche FTM Word | python-docx |
 | Rapprochement de noms | cache manuel → exact → fuzzy (difflib) → LLM LIHA (`etc/.env`) |
 | Frontend | page HTML/JS unique (`web/index.html`) — upgradable en React |
 
@@ -41,6 +44,17 @@ Le terminal doit rester ouvert pendant l'utilisation. Arrêter avec `Ctrl+C`.
 Ouvrir ensuite `http://127.0.0.1:8060`, dÃ©poser le fichier Excel dans la zone
 de gauche et le PDF dans la zone de droite, puis cliquer sur
 Â« GÃ©nÃ©rer le comparatif Â». Le traitement peut prendre quelques secondes.
+
+Une fois l'analyse ouverte, le panneau « Fiche de Travaux Modificative — Word »
+préremplit l'étage et regroupe exclusivement les objets effectivement détectés dans
+le PDF. La table présente pour chacun la quantité avant (Excel) et la quantité après
+(comptage direct du PDF) ; les lignes présentes uniquement dans la maquette sont
+exclues. L'objet, le pôle, le lot, le descriptif, les prix et les options
+administratives restent modifiables avant de cliquer sur « Enregistrer et générer le
+Word ». Les correspondances PDF → Excel se corrigent directement dans cette table :
+« Enregistrer » conserve le brouillon et « Appliquer et refaire l'Excel » relance le
+calcul du comparatif et la génération Excel avec ces choix. Les valeurs non
+renseignées restent vides dans le document.
 
 Validation technique avec les fichiers de rÃ©fÃ©rence inclus :
 

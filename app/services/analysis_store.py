@@ -100,6 +100,9 @@ def delete_analysis(job: str) -> list[str]:
     candidates = [path]
     if output.name:
         candidates.append(config.OUTPUT_DIR / output.name)
+    word_output = Path(str(data.get("word_output", "")))
+    if word_output.name:
+        candidates.append(config.OUTPUT_DIR / word_output.name)
     candidates.extend(config.UPLOAD_DIR.glob(f"{validate_job_id(job)}_*"))
 
     for candidate in candidates:

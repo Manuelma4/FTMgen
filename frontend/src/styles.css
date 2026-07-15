@@ -15,7 +15,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -207,7 +208,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   background: #ffffff;
   border: 1px solid #ccd6e2;
   border-radius: 8px;
@@ -219,6 +221,7 @@ select {
 
 input:focus,
 select:focus,
+textarea:focus,
 button:focus-visible,
 .button:focus-visible {
   outline: 2px solid #2f80ed;
@@ -601,6 +604,10 @@ button:focus-visible,
   gap: 8px;
 }
 
+.check-row input[type="checkbox"] {
+  min-height: 0;
+}
+
 .inspector-check {
   background: #fff8ed;
   border: 1px solid #f2d3a3;
@@ -678,6 +685,370 @@ th {
 
 .feedback p {
   margin: 0;
+}
+
+.success {
+  color: #087f5b;
+  margin: 0;
+}
+
+.sr-only {
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.ftm-panel {
+  border-top: 4px solid #137333;
+  gap: 18px;
+}
+
+.ftm-heading,
+.section-heading,
+.ftm-actions {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.ftm-heading h2,
+.section-heading h3,
+.ftm-heading p,
+.section-heading p {
+  margin: 0;
+}
+
+.ftm-heading p,
+.section-heading p,
+.ftm-actions span {
+  color: #64748b;
+  margin-top: 4px;
+}
+
+.eyebrow {
+  color: #137333;
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  margin-bottom: 3px;
+  text-transform: uppercase;
+}
+
+.ftm-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ftm-fields .span-2 {
+  grid-column: span 2;
+}
+
+.ftm-fields .span-3 {
+  grid-column: 1 / -1;
+}
+
+.ftm-fields textarea {
+  min-height: 110px;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.ftm-materials {
+  border-top: 1px solid #e6ebf1;
+  display: grid;
+  gap: 12px;
+  padding-top: 18px;
+}
+
+.ftm-table-wrap {
+  background: #ffffff;
+  border: 1px solid #d6e0eb;
+  border-radius: 12px;
+  box-shadow: 0 8px 22px #17324d0a;
+  max-height: 560px;
+  overflow: auto;
+  scrollbar-color: #9baec1 #eef2f6;
+  scrollbar-width: thin;
+}
+
+.ftm-material-table {
+  min-width: 1500px;
+  table-layout: fixed;
+}
+
+.ftm-material-table thead tr:nth-child(2) th:nth-child(1) {
+  width: 165px;
+}
+
+.ftm-material-table thead tr:nth-child(2) th:nth-child(2) {
+  width: 250px;
+}
+
+.ftm-material-table thead tr:nth-child(2) th:nth-child(3) {
+  width: 245px;
+}
+
+.ftm-material-table thead tr:nth-child(2) th:nth-child(4) {
+  width: 315px;
+}
+
+.ftm-material-table thead tr:nth-child(2) th:nth-child(n+5):nth-child(-n+8) {
+  width: 120px;
+}
+
+.ftm-material-table td {
+  background: #ffffff;
+  padding: 9px 8px;
+  transition: background-color .15s ease;
+  vertical-align: middle;
+}
+
+.ftm-material-table tbody tr:hover td {
+  background: #f7fbff;
+}
+
+.ftm-material-table thead th {
+  border-bottom-color: #d8e3ee;
+  color: #40546a;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  z-index: 4;
+}
+
+.ftm-material-table thead tr:first-child th {
+  background: #eaf2fb;
+  color: #173f66;
+  height: 30px;
+  text-align: center;
+  top: 0;
+  z-index: 6;
+}
+
+.ftm-material-table thead tr:nth-child(2) th {
+  background: #f7f9fc;
+  top: 30px;
+}
+
+.ftm-material-table thead tr:first-child th:last-child {
+  border-left: 1px solid #d8e3ee;
+}
+
+.ftm-material-table input {
+  min-height: 40px;
+  width: 100%;
+}
+
+.ftm-material-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.ftm-material-table td:last-child,
+.ftm-material-table th:last-child {
+  width: 52px;
+}
+
+.ftm-material-table .empty-table {
+  color: #64748b;
+  padding: 18px;
+  text-align: center;
+}
+
+.word-relations-toolbar {
+  align-items: center;
+  background: linear-gradient(120deg, #f0f7ff 0%, #f7fbff 100%);
+  border: 1px solid #c9def2;
+  border-radius: 12px;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  padding: 14px 16px;
+}
+
+.word-relations-copy {
+  min-width: 260px;
+}
+
+.word-relations-title {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.word-relations-title strong {
+  color: #153a5d;
+  font-size: 14px;
+}
+
+.word-relations-toolbar span {
+  color: #52667a;
+  display: block;
+  margin-top: 5px;
+}
+
+.word-relations-toolbar .word-row-count {
+  background: #dcecff;
+  border: 1px solid #bdd7f2;
+  border-radius: 999px;
+  color: #24567e;
+  font-size: 11px;
+  font-weight: 800;
+  margin: 0;
+  padding: 3px 8px;
+  text-transform: uppercase;
+}
+
+.word-relation-actions {
+  justify-content: flex-end;
+}
+
+.word-relation-actions button {
+  min-height: 40px;
+}
+
+.validate-additions-button:not(:disabled) {
+  background: #ffffff;
+  border-color: #9fc3e6;
+  color: #24567e;
+}
+
+.word-correspondence-cell {
+  position: relative;
+}
+
+.word-correspondence-cell .combo-menu {
+  min-width: min(420px, 70vw);
+}
+
+.ftm-material-table td:nth-child(4) .combo-menu {
+  left: auto;
+  right: 0;
+}
+
+.word-addition-check {
+  color: #52667a;
+  font-size: 11px;
+  gap: 6px;
+  line-height: 1.2;
+  margin-top: 6px;
+  white-space: normal;
+}
+
+.word-addition-check input[type="checkbox"] {
+  accent-color: #24567e;
+  flex: 0 0 auto;
+  height: 14px;
+  width: 14px;
+}
+
+.word-source-cell {
+  white-space: normal;
+}
+
+.word-source-value {
+  color: #43566a;
+  display: -webkit-box;
+  line-height: 1.35;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.word-source-material {
+  color: #17324d;
+  font-weight: 650;
+}
+
+.word-quantity-cell {
+  text-align: center;
+}
+
+.word-quantity {
+  align-items: center;
+  border: 1px solid;
+  border-radius: 999px;
+  display: inline-flex;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  justify-content: center;
+  min-height: 32px;
+  min-width: 48px;
+  padding: 5px 10px;
+}
+
+.word-quantity-before {
+  background: #f0f4f8;
+  border-color: #d3dde8;
+  color: #3f5266;
+}
+
+.word-quantity-after {
+  background: #edf9f2;
+  border-color: #bfe3cd;
+  color: #157347;
+}
+
+.compact-button {
+  min-height: 38px;
+}
+
+.component-rules summary {
+  color: #17324d;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.ftm-options-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ftm-options-grid fieldset {
+  border: 1px solid #dce3ec;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+  padding: 12px;
+}
+
+.ftm-options-grid legend {
+  color: #17324d;
+  font-weight: 800;
+  padding: 0 5px;
+}
+
+.ftm-signatures {
+  border: 1px solid #dce3ec;
+  border-radius: 8px;
+  padding: 11px 12px;
+}
+
+.ftm-signatures summary {
+  color: #17324d;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.ftm-signatures[open] summary {
+  margin-bottom: 12px;
+}
+
+.ftm-actions {
+  border-top: 1px solid #e6ebf1;
+  padding-top: 14px;
 }
 
 .mappings-panel {
@@ -780,18 +1151,29 @@ th {
 }
 
 .combo-control {
-  display: grid;
-  gap: 6px;
-  grid-template-columns: minmax(0, 1fr) 38px;
+  display: block;
 }
 
 .combo-control input {
+  background: #ffffff;
+  border-color: #b9c9d9;
   width: 100%;
 }
 
-.combo-control button {
-  min-height: 38px;
-  padding: 8px 0;
+.combo-control input:hover:not(:disabled) {
+  border-color: #7fa5c7;
+}
+
+.combo-control input:focus {
+  border-color: #2f80ed;
+  box-shadow: 0 0 0 3px #2f80ed17;
+}
+
+.combo-control input:disabled {
+  background: #edf7f1;
+  border-color: #bfdfca;
+  color: #217346;
+  opacity: 1;
 }
 
 .combo-menu {
@@ -819,6 +1201,7 @@ th {
   min-height: 32px;
   padding: 7px 9px;
   text-align: left;
+  white-space: normal;
   width: 100%;
 }
 
@@ -887,8 +1270,14 @@ th {
     flex-direction: column;
   }
 
+  .word-relations-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .mappings-grid,
-  .component-rule {
+  .component-rule,
+  .ftm-options-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -925,8 +1314,21 @@ th {
   }
 
   .actions,
-  .compact-actions {
+  .compact-actions,
+  .ftm-heading,
+  .section-heading,
+  .ftm-actions {
+    align-items: stretch;
     flex-direction: column;
+  }
+
+  .ftm-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .ftm-fields .span-2,
+  .ftm-fields .span-3 {
+    grid-column: auto;
   }
 
   .mapping-row,

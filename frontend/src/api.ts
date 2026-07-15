@@ -1,4 +1,4 @@
-import type { AnalysisSummary, Corrections, HistoryItem, LevelOption, MarkerResponse } from './types';
+import type { AnalysisSummary, Corrections, FtmDocumentData, HistoryItem, LevelOption, MarkerResponse } from './types';
 
 async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
@@ -58,5 +58,17 @@ export function recalculate(job: string, corrections: Corrections): Promise<Anal
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(corrections),
+  });
+}
+
+export function generateFtmWord(job: string, data: FtmDocumentData): Promise<{
+  ftm_document: FtmDocumentData;
+  word_download: string;
+  updated_at: string;
+}> {
+  return requestJson(`/api/history/${job}/ftm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
   });
 }
