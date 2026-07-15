@@ -62,9 +62,12 @@ def _match_rooms(pdf_rooms: list[str], excel_pieces: list[str], overrides: dict 
     matches, unmatched = {}, []
     overrides = overrides or {}
     for room in pdf_rooms:
-        manual = overrides.get(room)
-        if manual in excel_pieces:
-            matches[room] = (manual, 1.0)
+        if room in overrides:
+            manual = str(overrides.get(room) or "").strip()
+            if manual:
+                matches[room] = (manual, 1.0)
+            else:
+                unmatched.append(room)
             continue
         rn = _norm(room)
         best, best_score = None, 0.0
@@ -167,7 +170,8 @@ def _excel_category_maps(scope: pd.DataFrame) -> tuple[dict[tuple[str, str], str
     return by_piece_material, by_material
 
 
-def _match_materials(pdf_articles: list[str], excel_materials: list[str], overrides: dict | None = None) -> tuple[dict, bool]:
+def _match_materials(pdf_articles: list[str], excel_materials: list[str], overrides: dict | None = None,
+                     validated_articles: list[str] | None = None) -> tuple[dict, bool]:
     """Rapproche les articles du plan des matériels maquette.
     4 étages : cache manuel/persisté -> exact -> fuzzy -> LLM."""
     mapping: dict[str, tuple[str, str, float]] = {}
@@ -176,11 +180,17 @@ def _match_materials(pdf_articles: list[str], excel_materials: list[str], overri
     norm_index = {_norm(m): m for m in excel_materials}
     valid = set(excel_materials)
     overrides = overrides or {}
+    validated = {_norm(article) for article in (validated_articles or []) if str(article).strip()}
 
     remaining = []
     for art in pdf_articles:
-        if overrides.get(art) in valid:
-            mapping[art] = (overrides[art], "correspondance Excel", 1.0)
+        if art in overrides:
+            manual = str(overrides.get(art) or "").strip()
+            if manual:
+                mapping[art] = (manual, "correspondance utilisateur", 1.0)
+            continue
+        if _norm(art) in validated:
+            mapping[art] = (art, "validé sans équivalent Excel", 1.0)
             continue
         exact = norm_index.get(_norm(art))
         if exact:
@@ -232,7 +242,8 @@ def _match_materials(pdf_articles: list[str], excel_materials: list[str], overri
 
 def compare(excel_df: pd.DataFrame, pdf: PdfExtraction,
             room_overrides: dict | None = None, material_overrides: dict | None = None,
-            niveau_excel: str | None = None, nom_niveau: str | None = None) -> CompareResult:
+            niveau_excel: str | None = None, nom_niveau: str | None = None,
+            validated_articles: list[str] | None = None) -> CompareResult:
     display_level = (nom_niveau or "").strip() or (niveau_excel or "").strip() \
         or (f"R{pdf.niveau_hint}" if pdf.niveau_hint else "")
     res = CompareResult(remarks=list(pdf.remarks), niveau=display_level)
@@ -276,7 +287,7 @@ def compare(excel_df: pd.DataFrame, pdf: PdfExtraction,
     # vocabulaire = tout le niveau (les pièces nouvelles utilisent le même matériel)
     pdf_articles = sorted(apres["article"].unique())
     excel_materials = sorted(m for m in scope["materiel"].unique() if m)
-    mat_map, res.llm_used = _match_materials(pdf_articles, excel_materials, material_overrides)
+    mat_map, res.llm_used = _match_materials(pdf_articles, excel_materials, material_overrides, validated_articles)
     res.material_mapping = mat_map
     apres["materiel"] = apres["article"].map(lambda a: mat_map.get(a, (a,))[0])
     category_by_piece_material, category_by_material = _excel_category_maps(scope)

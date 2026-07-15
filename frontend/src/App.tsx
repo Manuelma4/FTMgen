@@ -27,7 +27,14 @@ import type {
 } from './types';
 
 function emptyCorrections(): Corrections {
-  return { rooms: [], manual_objects: [], edited_objects: {} };
+  return {
+    rooms: [],
+    manual_objects: [],
+    edited_objects: {},
+    room_mappings: {},
+    material_mappings: {},
+    validated_articles: [],
+  };
 }
 
 function normalizeAnalysis(data: AnalysisSummary): AnalysisSummary {
@@ -44,10 +51,157 @@ function normalizeAnalysis(data: AnalysisSummary): AnalysisSummary {
       rooms: data.corrections?.rooms || [],
       manual_objects: data.corrections?.manual_objects || [],
       edited_objects: data.corrections?.edited_objects || {},
+      room_mappings: data.corrections?.room_mappings || {},
+      material_mappings: data.corrections?.material_mappings || {},
+      validated_articles: data.corrections?.validated_articles || [],
     },
+    referentiel_excel: {
+      pieces: data.referentiel_excel?.pieces || [],
+      materiels: data.referentiel_excel?.materiels || [],
+    },
+    pieces_rapprochees: data.pieces_rapprochees || [],
+    pieces_non_rapprochees: data.pieces_non_rapprochees || [],
+    articles_rapproches: data.articles_rapproches || [],
+    objets_composes: data.objets_composes || [],
     statuts: data.statuts || {},
     audit_excel: data.audit_excel || {},
   };
+}
+
+function hasOwnValue(source: Record<string, string>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(source, key);
+}
+
+function normalizeSearch(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function uniqueSorted(values: Array<string | undefined | null>): string[] {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean))).sort((left, right) => (
+    left.localeCompare(right, 'fr', { sensitivity: 'base' })
+  ));
+}
+
+interface SearchableRelationFieldProps {
+  value?: string;
+  suggested?: string;
+  options: string[];
+  placeholder: string;
+  specialLabel: string;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}
+
+function SearchableRelationField({
+  value,
+  suggested = '',
+  options,
+  placeholder,
+  specialLabel,
+  disabled = false,
+  onChange,
+}: SearchableRelationFieldProps) {
+  const displayValue = value !== undefined ? (value === '' ? specialLabel : value) : suggested;
+  const [query, setQuery] = useState(displayValue);
+  const [open, setOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setQuery(displayValue);
+    }
+  }, [displayValue, open]);
+
+  const search = showAll || query === specialLabel ? '' : query.trim();
+  const normalizedSearch = normalizeSearch(search);
+  const filtered = options
+    .filter((option) => !normalizedSearch || normalizeSearch(option).includes(normalizedSearch))
+    .slice(0, 80);
+  const exact = options.some((option) => normalizeSearch(option) === normalizedSearch);
+  const canAdd = Boolean(search && !exact && normalizeSearch(suggested) !== normalizedSearch);
+
+  function choose(nextValue: string): void {
+    onChange(nextValue);
+    setQuery(nextValue === '' ? specialLabel : nextValue);
+    setOpen(false);
+    setShowAll(false);
+  }
+
+  function handleChange(nextQuery: string): void {
+    setQuery(nextQuery);
+    setShowAll(false);
+    if (nextQuery === specialLabel) {
+      onChange('');
+    } else {
+      onChange(nextQuery);
+    }
+    setOpen(true);
+  }
+
+  return (
+    <div className="combo">
+      <div className="combo-control">
+        <input
+          value={disabled ? '' : query}
+          disabled={disabled}
+          placeholder={disabled ? specialLabel : placeholder}
+          onFocus={(event) => {
+            event.currentTarget.select();
+            setOpen(true);
+            setShowAll(true);
+          }}
+          onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+          onChange={(event) => handleChange(event.target.value)}
+        />
+        <button
+          type="button"
+          disabled={disabled}
+          aria-label="Afficher les options"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            setQuery('');
+            setShowAll(true);
+            setOpen(true);
+          }}
+        >
+          ▾
+        </button>
+      </div>
+      {open && !disabled && (
+        <div className="combo-menu">
+          <span className="combo-count">
+            {options.length} option{options.length > 1 ? 's' : ''} disponible{options.length > 1 ? 's' : ''}
+          </span>
+          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose('')}>
+            {specialLabel}
+          </button>
+          {suggested && normalizeSearch(suggested) !== normalizeSearch(search) && (
+            <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(suggested)}>
+              Proposition : {suggested}
+            </button>
+          )}
+          {filtered.map((option) => (
+            <button key={option} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>
+              {option}
+            </button>
+          ))}
+          {canAdd && (
+            <button type="button" className="combo-add" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(search)}>
+              Ajouter « {search} »
+            </button>
+          )}
+          {filtered.length === 0 && !canAdd && (
+            <span>Aucune option ne correspond à la recherche</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function App() {
@@ -68,11 +222,15 @@ export function App() {
   const [manualObjects, setManualObjects] = useState<ManualObject[]>([]);
   const [editedObjects, setEditedObjects] = useState<Record<string, EditedObjectPatch>>({});
   const [roomCorrections, setRoomCorrections] = useState<Corrections['rooms']>([]);
+  const [roomMappings, setRoomMappings] = useState<Record<string, string>>({});
+  const [materialMappings, setMaterialMappings] = useState<Record<string, string>>({});
+  const [validatedArticles, setValidatedArticles] = useState<string[]>([]);
   const [sidebarWidth, setSidebarWidth] = useState(340);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(380);
   const gridRef = useRef<HTMLElement | null>(null);
   const lastJobRef = useRef<string | null>(null);
+  const referentialReloadRef = useRef<string | null>(null);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
 
@@ -82,14 +240,81 @@ export function App() {
     [markers, selectedId],
   );
   const corrections = useMemo<Corrections>(
-    () => ({ rooms: roomCorrections, manual_objects: manualObjects, edited_objects: editedObjects }),
-    [roomCorrections, manualObjects, editedObjects],
+    () => ({
+      rooms: roomCorrections,
+      manual_objects: manualObjects,
+      edited_objects: editedObjects,
+      room_mappings: roomMappings,
+      material_mappings: materialMappings,
+      validated_articles: validatedArticles,
+    }),
+    [roomCorrections, manualObjects, editedObjects, roomMappings, materialMappings, validatedArticles],
   );
   const selectedPatch = selected
     ? selected.displayKind === 'manual'
       ? { room: selected.room, reference: selected.reference, ignored: selected.ignored }
       : editedObjects[selected.detection_id]
     : undefined;
+  const excelPieces = useMemo(() => {
+    if (!analysis) return [];
+    return uniqueSorted([
+      ...(analysis.referentiel_excel?.pieces || []),
+      ...(analysis.pieces_rapprochees || []).map((item) => item.maquette),
+      ...analysis.comparatif.filter((row) => row.quantite_avant > 0).map((row) => row.piece.replace(/\s*\[nouvelle pièce\]\s*$/i, '')),
+    ]);
+  }, [analysis]);
+  const excelMaterials = useMemo(() => {
+    if (!analysis) return [];
+    return uniqueSorted([
+      ...(analysis.referentiel_excel?.materiels || []),
+      ...(analysis.articles_rapproches || []).map((item) => item.maquette),
+      ...analysis.comparatif.filter((row) => row.quantite_avant > 0).map((row) => row.materiel),
+    ]);
+  }, [analysis]);
+  const roomRelations = useMemo(() => {
+    if (!analysis) return [];
+    const suggested = new Map((analysis.pieces_rapprochees || []).map((item) => [item.plan, item.maquette]));
+    const rooms = Array.from(new Set([
+      ...analysis.pieces_plan,
+      ...analysis.traceabilite.map((item) => item.room).filter(Boolean),
+    ])).sort();
+    return rooms.map((room) => ({
+      plan: room,
+      selected: hasOwnValue(roomMappings, room) ? roomMappings[room] : undefined,
+      suggested: suggested.get(room) || '',
+    }));
+  }, [analysis, roomMappings]);
+  const articleMatches = useMemo(
+    () => new Map((analysis?.articles_rapproches || []).map((item) => [item.plan, item])),
+    [analysis],
+  );
+  const articlesToValidate = useMemo(() => (
+    Array.from(new Set((analysis?.comparatif || [])
+      .filter((row) => row.statut?.startsWith('À VALIDER') && row.quantite_apres > 0)
+      .map((row) => row.materiel)
+      .filter(Boolean)))
+  ), [analysis]);
+  const materialRelations = useMemo(() => {
+    if (!analysis) return [];
+    const detectedArticles = analysis.traceabilite
+      .map((item) => item.article || item.original_article || '')
+      .filter(Boolean);
+    const componentArticles = (analysis.objets_composes || [])
+      .flatMap((rule) => rule.items.map((item) => item.article));
+    const articles = Array.from(new Set([
+      ...detectedArticles,
+      ...Array.from(articleMatches.keys()),
+      ...articlesToValidate,
+      ...componentArticles,
+    ])).sort();
+    return articles.map((article) => ({
+      article,
+      selected: hasOwnValue(materialMappings, article) ? materialMappings[article] : undefined,
+      suggested: articleMatches.get(article)?.maquette || '',
+      method: articleMatches.get(article)?.methode || '',
+      validated: validatedArticles.includes(article),
+    }));
+  }, [analysis, articleMatches, articlesToValidate, materialMappings, validatedArticles]);
 
   useEffect(() => {
     void refreshHistory();
@@ -107,6 +332,9 @@ export function App() {
     setRoomCorrections(analysis.corrections.rooms || []);
     setManualObjects(analysis.corrections.manual_objects || []);
     setEditedObjects(analysis.corrections.edited_objects || {});
+    setRoomMappings(analysis.corrections.room_mappings || {});
+    setMaterialMappings(analysis.corrections.material_mappings || {});
+    setValidatedArticles(analysis.corrections.validated_articles || []);
     if (isNewJob) {
       const pages = Object.keys(analysis.pages || {});
       setPage(Number(pages.find((item) => analysis.pages[item] === 'ELECTRICITE') || pages[0] || 1));
@@ -126,6 +354,89 @@ export function App() {
       setCurrentRef(String(references[0].reference));
     }
   }, [analysis, currentPageType, currentRef]);
+
+  useEffect(() => {
+    if (!analysis?.job) return;
+    const hasReferential = Boolean(
+      analysis.referentiel_excel?.pieces?.length || analysis.referentiel_excel?.materiels?.length,
+    );
+    if (hasReferential || referentialReloadRef.current === analysis.job) return;
+    referentialReloadRef.current = analysis.job;
+    void getAnalysis(analysis.job)
+      .then((data) => {
+        setAnalysis((current) => (
+          current?.job === data.job ? normalizeAnalysis(data) : current
+        ));
+      })
+      .catch(() => undefined);
+  }, [analysis?.job, analysis?.referentiel_excel?.pieces?.length, analysis?.referentiel_excel?.materiels?.length]);
+
+  function buildCorrections(overrides: Partial<Corrections> = {}): Corrections {
+    return { ...corrections, ...overrides };
+  }
+
+  function updateRoomMapping(planRoom: string, excelPiece: string): void {
+    setRoomMappings((items) => {
+      const next = { ...items };
+      next[planRoom] = excelPiece;
+      return next;
+    });
+  }
+
+  function updateMaterialMapping(planArticle: string, excelMaterial: string): void {
+    setMaterialMappings((items) => {
+      const next = { ...items };
+      next[planArticle] = excelMaterial;
+      return next;
+    });
+    if (excelMaterial) {
+      setValidatedArticles((items) => items.filter((item) => item !== planArticle));
+    }
+  }
+
+  function toggleValidatedArticle(article: string, checked: boolean): void {
+    setValidatedArticles((items) => {
+      if (checked) return Array.from(new Set([...items, article]));
+      return items.filter((item) => item !== article);
+    });
+    if (checked) {
+      setMaterialMappings((items) => {
+        const next = { ...items };
+        delete next[article];
+        return next;
+      });
+    }
+  }
+
+  async function saveCorrectionSet(nextCorrections: Corrections, successMessage: string): Promise<void> {
+    if (!analysis) return;
+    setStatus('Enregistrement des corrections...');
+    setError('');
+    try {
+      const saved = await saveDraft(analysis.job, nextCorrections);
+      setAnalysis((current) => (current ? { ...current, corrections: saved.corrections, updated_at: saved.updated_at } : current));
+      setStatus(successMessage);
+      await refreshHistory();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Impossible d’enregistrer les corrections');
+      setStatus('');
+    }
+  }
+
+  async function recalculateWithCorrections(nextCorrections: Corrections): Promise<void> {
+    if (!analysis) return;
+    setError('');
+    setStatus('Recalcul du comparatif et génération de l’Excel...');
+    try {
+      const result = normalizeAnalysis(await recalculate(analysis.job, nextCorrections));
+      setAnalysis(result);
+      await refreshHistory();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Échec du recalcul');
+    } finally {
+      setStatus('');
+    }
+  }
 
   async function refreshHistory(): Promise<void> {
     setHistory(await listHistory());
@@ -299,17 +610,7 @@ export function App() {
 
   async function saveSelectedDraft(): Promise<void> {
     if (!analysis) return;
-    setStatus('Enregistrement de la correction...');
-    setError('');
-    try {
-      const saved = await saveDraft(analysis.job, corrections);
-      setAnalysis((current) => (current ? { ...current, corrections: saved.corrections, updated_at: saved.updated_at } : current));
-      setStatus('Correction enregistrée. Recalculez quand vous voulez refaire l’Excel.');
-      await refreshHistory();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Impossible d’enregistrer la correction');
-      setStatus('');
-    }
+    await saveCorrectionSet(corrections, 'Correction enregistrée. Recalculez quand vous voulez refaire l’Excel.');
   }
 
   async function deleteSelectedObject(): Promise<void> {
@@ -333,12 +634,12 @@ export function App() {
           item.detection_id === selected.detection_id ? { ...item, ignored: true } : item
         )));
       }
-      const saved = await saveDraft(analysis.job, { rooms: roomCorrections, manual_objects: nextManual, edited_objects: nextEdited });
-      setAnalysis((current) => (current ? { ...current, corrections: saved.corrections, updated_at: saved.updated_at } : current));
-      setStatus(selected.displayKind === 'manual'
-        ? 'Objet supprimé. Le prochain recalcul mettra l’Excel à jour.'
-        : 'Objet ignoré : il sera retiré au prochain recalcul. Décochez « Ignorer » pour annuler.');
-      await refreshHistory();
+      await saveCorrectionSet(
+        buildCorrections({ manual_objects: nextManual, edited_objects: nextEdited }),
+        selected.displayKind === 'manual'
+          ? 'Objet supprimé. Le prochain recalcul mettra l’Excel à jour.'
+          : 'Objet ignoré : il sera retiré au prochain recalcul. Décochez « Ignorer » pour annuler.',
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Impossible de supprimer l’objet');
       setStatus('');
@@ -347,17 +648,22 @@ export function App() {
 
   async function recalcExcel(): Promise<void> {
     if (!analysis) return;
-    setError('');
-    setStatus('Recalcul du comparatif et génération de l’Excel...');
-    try {
-      const result = normalizeAnalysis(await recalculate(analysis.job, corrections));
-      setAnalysis(result);
-      await refreshHistory();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Échec du recalcul');
-    } finally {
-      setStatus('');
-    }
+    await recalculateWithCorrections(corrections);
+  }
+
+  async function saveRelationsDraft(): Promise<void> {
+    await saveCorrectionSet(corrections, 'Relations enregistrées. Recalculez pour appliquer le comparatif.');
+  }
+
+  async function applyRelations(): Promise<void> {
+    await recalculateWithCorrections(corrections);
+  }
+
+  async function validateAllUnmatchedArticles(): Promise<void> {
+    if (articlesToValidate.length === 0) return;
+    const nextValidated = Array.from(new Set([...validatedArticles, ...articlesToValidate]));
+    setValidatedArticles(nextValidated);
+    await recalculateWithCorrections(buildCorrections({ validated_articles: nextValidated }));
   }
 
   const canRun = Boolean(excel && pdf && level);
@@ -443,7 +749,7 @@ export function App() {
               <input type="file" accept=".pdf" onChange={(event) => event.target.files?.[0] && setPdf(event.target.files[0])} />
             </label>
             <label>
-              Niveau Excel
+              Niveau / feuille Excel
               <select value={level} onChange={(event) => setLevel(event.target.value)}>
                 <option value="">Aucun niveau</option>
                 {levels.map((item) => (
@@ -488,6 +794,93 @@ export function App() {
                   {analysis.download && <a className="button" href={analysis.download}>Télécharger Excel</a>}
                   {analysis.pdf_original && <a className="button" href={analysis.pdf_original} target="_blank" rel="noreferrer">PDF original</a>}
                 </div>
+              </section>
+
+              <section className="panel mappings-panel">
+                <div className="mappings-head">
+                  <div>
+                    <h2>Correspondances</h2>
+                    <span>{roomRelations.length} pièces · {materialRelations.length} objets</span>
+                  </div>
+                  <div className="actions">
+                    <button type="button" onClick={() => void saveRelationsDraft()}>
+                      Enregistrer les relations
+                    </button>
+                    <button type="button" className="primary" onClick={() => void applyRelations()}>
+                      Appliquer et recalculer
+                    </button>
+                    <button
+                      type="button"
+                      disabled={articlesToValidate.length === 0}
+                      onClick={() => void validateAllUnmatchedArticles()}
+                    >
+                      Valider tous les objets sans correspondance
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mappings-grid">
+                  <section className="mapping-block">
+                    <h3>Pièces du plan</h3>
+                    <div className="mapping-list">
+                      {roomRelations.map((item) => (
+                        <label className="mapping-row" key={item.plan}>
+                          <span title={item.plan}>{item.plan}</span>
+                          <SearchableRelationField
+                            value={item.selected}
+                            suggested={item.suggested}
+                            options={excelPieces}
+                            placeholder="Rechercher une pièce Excel"
+                            specialLabel="Nouvelle pièce / sans relation"
+                            onChange={(value) => updateRoomMapping(item.plan, value)}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="mapping-block">
+                    <h3>Objets détectés</h3>
+                    <div className="mapping-list">
+                      {materialRelations.map((item) => (
+                        <div className="mapping-row material-row" key={item.article}>
+                          <span title={item.article}>{item.article}</span>
+                          <SearchableRelationField
+                            value={item.selected}
+                            suggested={item.suggested}
+                            options={excelMaterials}
+                            disabled={item.validated}
+                            placeholder="Rechercher un matériel Excel"
+                            specialLabel={item.validated ? 'Validé comme ajout' : 'Sans correspondance Excel'}
+                            onChange={(value) => updateMaterialMapping(item.article, value)}
+                          />
+                          <label className="check-row validate-row">
+                            <input
+                              type="checkbox"
+                              checked={item.validated}
+                              onChange={(event) => toggleValidatedArticle(item.article, event.target.checked)}
+                            />
+                            Valider comme ajout
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+
+                {(analysis.objets_composes || []).length > 0 && (
+                  <div className="component-rules">
+                    <h3>Objets composés</h3>
+                    {(analysis.objets_composes || []).map((rule) => (
+                      <div className="component-rule" key={rule.article}>
+                        <strong>{rule.article}</strong>
+                        <span>
+                          {rule.items.map((item) => `${item.quantity} × ${item.article}`).join(' · ')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
 
               <section className="analysis-grid" ref={gridRef} style={gridStyle}>

@@ -28,18 +28,22 @@ def run(excel_path: str, pdf_path: str, out_path: str | None = None,
         out_path = str(config.OUTPUT_DIR / f"FTM_comparatif_{stamp}.xlsx")
 
     df = excel_reader.read_listing(excel_path)
+    corrections = corrections or {}
     room_overrides, material_overrides = excel_reader.read_correspondences(excel_path)
+    room_overrides = {**room_overrides, **_clean_mapping(corrections.get("room_mappings") or {}, keep_empty=True)}
+    material_overrides = {**material_overrides, **_clean_mapping(corrections.get("material_mappings") or {}, keep_empty=True)}
     pdf = pdf_reader.extract_pdf(pdf_path)
     raw_catalog = json.loads((config.DATA_DIR / "symbol_catalog.json").read_text(encoding="utf-8"))
     article_meta = _article_meta(raw_catalog)
     article_refs = _article_refs(raw_catalog)
     _assign_detection_metadata(pdf, article_refs)
     initial_zones = _build_room_zones(pdf)
-    effective_zones = _merge_room_zones(initial_zones, (corrections or {}).get("rooms", []))
-    _apply_user_corrections(pdf, effective_zones, article_meta, corrections or {})
+    effective_zones = _merge_room_zones(initial_zones, corrections.get("rooms", []))
+    _apply_user_corrections(pdf, effective_zones, article_meta, corrections)
     result = compare_mod.compare(
         df, pdf, room_overrides, material_overrides,
         niveau_excel=niveau_excel, nom_niveau=nom_niveau,
+        validated_articles=corrections.get("validated_articles") or [],
     )
     report.write_report(out_path, result, pdf, Path(excel_path).name, Path(pdf_path).name)
 
@@ -109,6 +113,7 @@ def run(excel_path: str, pdf_path: str, out_path: str | None = None,
                 "reference": str(entry.get("reference", "?")),
                 "count": detected_by_type.get((page_type, article), 0),
             })
+    excel_scope = _excel_scope(df, niveau_excel)
     return {
         "output": out_path,
         "niveau": result.niveau or None,
@@ -116,11 +121,20 @@ def run(excel_path: str, pdf_path: str, out_path: str | None = None,
         "pages": {str(k): v for k, v in pdf.page_types.items()},
         "pieces_plan": [r.name for r in pdf.rooms],
         "pieces_zones": effective_zones,
-        "corrections": corrections or {"rooms": [], "manual_objects": [], "edited_objects": {}},
+        "corrections": _normalize_corrections(corrections),
+        "referentiel_excel": {
+            "pieces": sorted(str(item) for item in excel_scope["piece"].dropna().unique().tolist() if str(item).strip()),
+            "materiels": sorted(str(item) for item in excel_scope["materiel"].dropna().unique().tolist() if str(item).strip()),
+        },
         "pieces_rapprochees": [
             {"plan": a, "maquette": b, "score": s} for a, b, s in result.room_matches
         ],
         "pieces_non_rapprochees": result.unmatched_rooms,
+        "articles_rapproches": [
+            {"plan": article, "maquette": target, "methode": method, "score": score}
+            for article, (target, method, score) in sorted(result.material_mapping.items())
+        ],
+        "objets_composes": _component_rules_for_pdf(pdf, raw_catalog),
         "symboles_detectes": len(pdf.symbols),
         "symboles_vision": sum(1 for s in pdf.symbols if s.source == "vision"),
         "vision_utilisee": pdf.cv_used,
@@ -170,6 +184,60 @@ def _article_refs(raw_catalog: dict) -> dict[str, str]:
         for entry in list(sections.get("glyphs", {}).values()) + sections.get("text", []):
             refs[entry["article"]] = str(entry.get("reference", ""))
     return refs
+
+
+def _clean_mapping(mapping: dict, keep_empty: bool = False) -> dict[str, str]:
+    clean = {}
+    for source, target in (mapping or {}).items():
+        left, right = str(source or "").strip(), str(target or "").strip()
+        if left and (right or keep_empty):
+            clean[left] = right
+    return clean
+
+
+def _normalize_corrections(corrections: dict) -> dict:
+    return {
+        "rooms": corrections.get("rooms") or [],
+        "manual_objects": corrections.get("manual_objects") or [],
+        "edited_objects": corrections.get("edited_objects") or {},
+        "room_mappings": _clean_mapping(corrections.get("room_mappings") or {}, keep_empty=True),
+        "material_mappings": _clean_mapping(corrections.get("material_mappings") or {}, keep_empty=True),
+        "validated_articles": [
+            str(item).strip() for item in (corrections.get("validated_articles") or [])
+            if str(item or "").strip()
+        ],
+    }
+
+
+def _excel_scope(df, niveau_excel: str | None):
+    if niveau_excel:
+        selected = df[df["niveau"].str.casefold() == niveau_excel.strip().casefold()]
+        if not selected.empty:
+            return selected
+    return df
+
+
+def _component_rules_for_pdf(pdf: pdf_reader.PdfExtraction, raw_catalog: dict) -> list[dict]:
+    detected = {_norm_token(symbol.article) for symbol in pdf.symbols}
+    rules = compare_mod._load_material_rules()
+    components = []
+    for rule in rules.get("components", []):
+        article = str(rule.get("article") or "").strip()
+        if not article or _norm_token(article) not in detected:
+            continue
+        components.append({
+            "article": article,
+            "items": [
+                {
+                    "article": str(item.get("article") or "").strip(),
+                    "categorie": str(item.get("categorie") or "").strip(),
+                    "quantity": int(item.get("quantity") or 1),
+                }
+                for item in rule.get("items", [])
+                if str(item.get("article") or "").strip()
+            ],
+        })
+    return components
 
 
 def _norm_token(value: str) -> str:

@@ -42,7 +42,7 @@ def main() -> None:
     parser.add_argument("workbook")
     args = parser.parse_args()
     rows, sheets = validate(args.workbook)
-    print(f"VALIDO: {args.workbook} | {rows} lineas | {sheets} hojas")
+    print(f"VALIDE : {args.workbook} | {rows} lignes | {sheets} feuilles")
 
 
 if __name__ == "__main__":

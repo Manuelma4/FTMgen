@@ -66,6 +66,9 @@ export interface Corrections {
   rooms: unknown[];
   manual_objects: ManualObject[];
   edited_objects: Record<string, EditedObjectPatch>;
+  room_mappings: Record<string, string>;
+  material_mappings: Record<string, string>;
+  validated_articles: string[];
 }
 
 export interface CompareRow {
@@ -95,6 +98,17 @@ export interface AnalysisSummary {
   pieces_plan: string[];
   pieces_zones: unknown[];
   corrections: Corrections;
+  referentiel_excel?: {
+    pieces: string[];
+    materiels: string[];
+  };
+  pieces_rapprochees?: Array<{ plan: string; maquette: string; score: number }>;
+  pieces_non_rapprochees?: string[];
+  articles_rapproches?: Array<{ plan: string; maquette: string; methode: string; score: number }>;
+  objets_composes?: Array<{
+    article: string;
+    items: Array<{ article: string; categorie: string; quantity: number }>;
+  }>;
   symboles_detectes: number;
   symboles_vision: number;
   statuts: Record<string, number>;

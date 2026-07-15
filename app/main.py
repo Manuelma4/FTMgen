@@ -5,6 +5,8 @@ Lancement :  .\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --port 8060
 """
 import uuid
 import json
+import re
+import unicodedata
 from io import BytesIO
 from datetime import datetime
 from pathlib import Path
@@ -121,6 +123,7 @@ def api_history_detail(job: str):
     output = Path(str(data.get("output", "")))
     if output.name:
         data["download"] = f"/api/download/{output.name}"
+    _enrich_analysis_for_ui(job, data)
     return JSONResponse(data)
 
 
@@ -165,6 +168,76 @@ def _job_excel(job: str) -> Path:
     return matches[0]
 
 
+def _norm_token(value: str) -> str:
+    value = unicodedata.normalize("NFD", str(value or ""))
+    value = "".join(c for c in value if unicodedata.category(c) != "Mn")
+    value = re.sub(r"[^a-z0-9]+", " ", value.lower())
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _enrich_analysis_for_ui(job: str, data: dict) -> None:
+    """Ajoute les référentiels manquants aux anciennes analyses sauvegardées."""
+    corrections = analysis_store.normalize_corrections(data.get("corrections") or {})
+    data["corrections"] = corrections
+
+    referential = data.get("referentiel_excel") or {}
+    if not referential.get("pieces") or not referential.get("materiels"):
+        try:
+            frame = excel_reader.read_listing(_job_excel(job))
+            level = data.get("niveau_excel_selectionne")
+            if level:
+                selected = frame[frame["niveau"].str.casefold() == str(level).strip().casefold()]
+                if not selected.empty:
+                    frame = selected
+            data["referentiel_excel"] = {
+                "pieces": sorted(str(item) for item in frame["piece"].dropna().unique().tolist() if str(item).strip()),
+                "materiels": sorted(str(item) for item in frame["materiel"].dropna().unique().tolist() if str(item).strip()),
+            }
+        except Exception:
+            data["referentiel_excel"] = {
+                "pieces": referential.get("pieces") or [],
+                "materiels": referential.get("materiels") or [],
+            }
+
+    if not data.get("articles_rapproches"):
+        mapped = {}
+        for item in data.get("traceabilite") or []:
+            article = str(item.get("article") or item.get("original_article") or "").strip()
+            material = str(item.get("materiel_compare") or "").strip()
+            if article and material:
+                mapped[article] = material
+        data["articles_rapproches"] = [
+            {"plan": article, "maquette": material, "methode": "analyse sauvegardée", "score": 1.0}
+            for article, material in sorted(mapped.items())
+        ]
+
+    if not data.get("objets_composes"):
+        detected = {
+            _norm_token(item.get("article") or item.get("original_article") or "")
+            for item in data.get("traceabilite") or []
+        }
+        try:
+            rules = json.loads((config.DATA_DIR / "material_rules.json").read_text(encoding="utf-8"))
+        except Exception:
+            rules = {}
+        data["objets_composes"] = [
+            {
+                "article": str(rule.get("article") or ""),
+                "items": [
+                    {
+                        "article": str(entry.get("article") or ""),
+                        "categorie": str(entry.get("categorie") or ""),
+                        "quantity": int(entry.get("quantity") or 1),
+                    }
+                    for entry in rule.get("items", [])
+                    if str(entry.get("article") or "").strip()
+                ],
+            }
+            for rule in rules.get("components", [])
+            if _norm_token(rule.get("article") or "") in detected
+        ]
+
+
 @app.post("/api/history/{job}/corrections")
 def api_save_corrections(job: str, payload: dict = Body(...)):
     """Enregistre les corrections utilisateur et recalcule le comparatif."""
@@ -182,6 +255,9 @@ def api_save_corrections(job: str, payload: dict = Body(...)):
         "rooms": payload.get("rooms") or [],
         "manual_objects": payload.get("manual_objects") or [],
         "edited_objects": payload.get("edited_objects") or {},
+        "room_mappings": payload.get("room_mappings") or {},
+        "material_mappings": payload.get("material_mappings") or {},
+        "validated_articles": payload.get("validated_articles") or [],
     }
     try:
         summary = pipeline.run(
@@ -299,12 +375,18 @@ def api_template_excel():
     header = workbook.add_format({"bold": True, "bg_color": "#17365D", "font_color": "white", "border": 1})
     note = workbook.add_format({"text_wrap": True, "valign": "top", "bg_color": "#EAF2F8"})
 
-    sheet = workbook.add_worksheet("Pièces + Matériel")
-    columns = ["Occupation", "Nom de la pièce", "Numéro", "Niveau", "Catégorie", "Code article", "Matériel", "Quantité"]
-    sheet.write_row(0, 0, columns, header)
-    sheet.write_row(1, 0, ["PRIVATIF", "Vasculaire 01", "R2-001", "Niveau 2", "Électricité", "ELEC-PC-001", "Prise de courant 16A 2P+T", 6])
-    sheet.set_column("A:A", 16); sheet.set_column("B:B", 26); sheet.set_column("C:C", 12)
-    sheet.set_column("D:E", 18); sheet.set_column("F:F", 18); sheet.set_column("G:G", 42); sheet.set_column("H:H", 10)
+    columns = ["N° LOT", "Occupation", "Nom de la pièce", "Catégorie", "Code article", "Matériel", "Quantité"]
+    for level, sample in [
+        ("RDC", [4, "TEP SCAN", "WC Personnel", "Sanitaire", "SAN-WC-001", "WC", 1]),
+        ("R+1", [27, "CHIRURGIE ESTHETIQUE", "Consultation", "Électricité", "ELEC-PC-001", "Prise de courant", 8]),
+        ("R+2", [47, "ANESTHESISTE", "Consultation", "CVC", "CVC-BR-001", "Bouche de reprise", 1]),
+    ]:
+        sheet = workbook.add_worksheet(level)
+        sheet.write(0, 0, level)
+        sheet.write_row(5, 0, columns, header)
+        sheet.write_row(6, 0, sample)
+        sheet.set_column("A:A", 12); sheet.set_column("B:B", 24); sheet.set_column("C:C", 28)
+        sheet.set_column("D:D", 18); sheet.set_column("E:E", 18); sheet.set_column("F:F", 42); sheet.set_column("G:G", 10)
 
     rooms = workbook.add_worksheet("Correspondance pièces")
     rooms.write_row(0, 0, ["Pièce plan (PDF)", "Pièce existante (Excel)", "Commentaire"], header)
@@ -318,7 +400,7 @@ def api_template_excel():
 
     help_sheet = workbook.add_worksheet("MODE D'EMPLOI")
     help_sheet.set_column("A:A", 110)
-    help_sheet.write(0, 0, "Colonnes obligatoires : Occupation, Nom de la pièce, Numéro, Niveau, Catégorie, Matériel, Quantité. Code article est recommandé mais optionnel.", note)
+    help_sheet.write(0, 0, "Format recommandé : une feuille par niveau (RDC, R+1, R+2...). Colonnes obligatoires : Occupation, Nom de la pièce, Catégorie, Matériel, Quantité. N° LOT/Numéro et Code article sont optionnels.", note)
     help_sheet.write(2, 0, "Si une pièce change de nom entre la maquette et le plan, renseigner la feuille Correspondance pièces. Sans cette information, FTMgen ne doit pas inventer la relation.", note)
     help_sheet.write(4, 0, "Si le même objet porte deux libellés différents, renseigner la feuille Correspondance articles avec le nom EXACT présent dans chaque source.", note)
     workbook.close()

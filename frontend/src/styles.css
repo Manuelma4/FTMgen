@@ -680,6 +680,169 @@ th {
   margin: 0;
 }
 
+.mappings-panel {
+  gap: 14px;
+}
+
+.mappings-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.mappings-head h2,
+.mapping-block h3,
+.component-rules h3 {
+  margin: 0;
+}
+
+.mappings-head span {
+  color: #64748b;
+  display: block;
+  margin-top: 3px;
+}
+
+.mappings-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+}
+
+.mapping-block {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.mapping-list {
+  display: grid;
+  gap: 8px;
+  max-height: 300px;
+  overflow: auto;
+  overflow-x: visible;
+  padding-right: 2px;
+}
+
+.mapping-row {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(150px, .75fr) minmax(220px, 1fr);
+}
+
+.mapping-row > span {
+  color: #17202a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.material-row {
+  grid-template-columns: minmax(140px, .7fr) minmax(190px, 1fr) minmax(128px, auto);
+}
+
+.validate-row {
+  color: #435166;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.component-rules {
+  border-top: 1px solid #edf1f5;
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+}
+
+.component-rule {
+  align-items: center;
+  background: #f7fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(180px, .45fr) minmax(0, 1fr);
+  padding: 9px 10px;
+}
+
+.component-rule span {
+  color: #435166;
+  overflow-wrap: anywhere;
+}
+
+.combo {
+  min-width: 0;
+  position: relative;
+}
+
+.combo-control {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 38px;
+}
+
+.combo-control input {
+  width: 100%;
+}
+
+.combo-control button {
+  min-height: 38px;
+  padding: 8px 0;
+}
+
+.combo-menu {
+  background: #ffffff;
+  border: 1px solid #ccd6e2;
+  border-radius: 8px;
+  box-shadow: 0 12px 28px #15283d26;
+  display: grid;
+  left: 0;
+  max-height: 260px;
+  min-width: min(420px, 78vw);
+  overflow: auto;
+  padding: 6px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+}
+
+.combo-menu button,
+.combo-menu span {
+  border: 0;
+  border-radius: 6px;
+  justify-content: flex-start;
+  min-height: 32px;
+  padding: 7px 9px;
+  text-align: left;
+  width: 100%;
+}
+
+.combo-menu button:hover {
+  background: #eef5ff;
+}
+
+.combo-menu .combo-add {
+  color: #0b7285;
+  font-weight: 700;
+}
+
+.combo-menu .combo-count {
+  color: #64748b;
+  font-size: 12px;
+  min-height: 24px;
+  padding-bottom: 4px;
+}
+
+.combo-menu span {
+  color: #64748b;
+  display: block;
+}
+
 /* Le toolbar est en flex : les règles responsive doivent agir sur les items. */
 @media (max-width: 1320px) {
   .zoom-controls {
@@ -718,6 +881,16 @@ th {
     align-items: stretch;
     flex-direction: column;
   }
+
+  .mappings-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mappings-grid,
+  .component-rule {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -754,5 +927,10 @@ th {
   .actions,
   .compact-actions {
     flex-direction: column;
+  }
+
+  .mapping-row,
+  .material-row {
+    grid-template-columns: 1fr;
   }
 }

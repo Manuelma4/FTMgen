@@ -1,28 +1,42 @@
 # -*- coding: utf-8 -*-
-"""Lecture du listing maquette « Pièces + Matériel » (export type MEDIVIE).
+"""Lecture du listing maquette "Pieces + Materiel" (export type MEDIVIE).
 
-Structure attendue : une ligne d'en-tête contenant « Occupation », puis une
-ligne par matériel ; les colonnes pièce/numéro/niveau ne sont renseignées que
-sur la première ligne de chaque pièce (cellules fusionnées) -> forward-fill.
+Structures acceptees :
+- une feuille avec une colonne Niveau ;
+- une feuille par niveau, avec le niveau porte par le nom de la feuille.
+
+Chaque feuille contient une ligne d'en-tete puis une ligne par materiel. Les
+colonnes piece/numero/niveau peuvent n'etre renseignees que sur la premiere
+ligne de chaque piece (cellules fusionnees) -> forward-fill.
 """
-import openpyxl
-import pandas as pd
 import re
 import unicodedata
+
+import openpyxl
+import pandas as pd
 
 COLUMNS = ["occupation", "piece", "numero", "niveau", "categorie", "code_article", "materiel", "quantite"]
 HEADER_FIRST_CELL = "occupation"
 
 HEADER_ALIASES = {
     "occupation": "occupation",
-    "nom de la piece": "piece", "piece": "piece",
-    "numero": "numero", "no": "numero",
+    "nom de la piece": "piece",
+    "piece": "piece",
+    "numero": "numero",
+    "no": "numero",
+    "n lot": "numero",
+    "lot": "numero",
     "niveau": "niveau",
     "categorie": "categorie",
-    "code article": "code_article", "code": "code_article",
-    "materiel": "materiel", "article": "materiel",
-    "quantite": "quantite", "qte": "quantite",
+    "code article": "code_article",
+    "code": "code_article",
+    "materiel": "materiel",
+    "article": "materiel",
+    "quantite": "quantite",
+    "qte": "quantite",
 }
+REQUIRED_BASE_COLUMNS = {"occupation", "piece", "categorie", "materiel", "quantite"}
+IGNORED_SHEETS = {"notation", "notations", "mode d emploi", "correspondance pieces", "correspondance articles"}
 
 
 def _norm(value) -> str:
@@ -32,23 +46,43 @@ def _norm(value) -> str:
 
 
 def read_listing(path: str) -> pd.DataFrame:
-    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    workbook = openpyxl.load_workbook(path, data_only=True, read_only=True)
     try:
-        ws = _find_sheet(wb)
-        rows = [r for r in ws.iter_rows(values_only=True)]
+        frames = []
+        errors = []
+        for sheet in _candidate_sheets(workbook):
+            rows = [row for row in sheet.iter_rows(values_only=True)]
+            try:
+                frame = _read_sheet_rows(rows, sheet.title)
+            except ValueError as exc:
+                errors.append(f"{sheet.title}: {exc}")
+                continue
+            if not frame.empty:
+                frames.append(frame)
     finally:
-        wb.close()
+        workbook.close()
 
+    if not frames:
+        detail = "; ".join(errors[:4])
+        suffix = f" Detail : {detail}" if detail else ""
+        raise ValueError(
+            "Feuille Pieces + Materiel introuvable : aucune feuille ne contient "
+            "les colonnes obligatoires Occupation, Nom de la piece, Categorie, "
+            f"Materiel et Quantite.{suffix}"
+        )
+
+    return pd.concat(frames, ignore_index=True).reset_index(drop=True)
+
+
+def _read_sheet_rows(rows: list[tuple], sheet_name: str) -> pd.DataFrame:
     header_idx = None
-    for i, row in enumerate(rows):
-        if row and str(row[0] or "").strip().lower() == HEADER_FIRST_CELL:
-            header_idx = i
+    for index, row in enumerate(rows):
+        labels = {_norm(value) for value in row if value is not None}
+        if HEADER_FIRST_CELL in labels:
+            header_idx = index
             break
     if header_idx is None:
-        raise ValueError(
-            "Feuille « Pièces + Matériel » introuvable : aucune ligne d'en-tête "
-            "commençant par 'Occupation'."
-        )
+        raise ValueError("aucune ligne d'en-tete contenant 'Occupation'")
 
     header = rows[header_idx]
     positions = {}
@@ -56,33 +90,40 @@ def read_listing(path: str) -> pd.DataFrame:
         canonical = HEADER_ALIASES.get(_norm(label))
         if canonical and canonical not in positions:
             positions[canonical] = index
-    required = {"occupation", "piece", "numero", "niveau", "categorie", "materiel", "quantite"}
-    missing = required - set(positions)
+
+    missing = REQUIRED_BASE_COLUMNS - set(positions)
     if missing:
-        raise ValueError(f"Colonnes obligatoires absentes de l'Excel : {sorted(missing)}")
+        raise ValueError(f"colonnes obligatoires absentes : {sorted(missing)}")
 
     data = []
     for row in rows[header_idx + 1:]:
-        data.append({column: row[positions[column]] if column in positions and positions[column] < len(row) else None
-                     for column in COLUMNS})
-    df = pd.DataFrame(data, columns=COLUMNS).dropna(how="all")
+        data.append({
+            column: row[positions[column]] if column in positions and positions[column] < len(row) else None
+            for column in COLUMNS
+        })
+    frame = pd.DataFrame(data, columns=COLUMNS).dropna(how="all")
 
-    # cellules fusionnées : la pièce n'apparaît que sur sa première ligne
-    for col in ("occupation", "piece", "numero", "niveau"):
-        df[col] = df[col].ffill()
+    for column in ("occupation", "piece", "numero", "niveau"):
+        if column in positions:
+            frame[column] = frame[column].ffill()
 
-    df = df.dropna(subset=["materiel"])
-    for col in ("occupation", "piece", "niveau", "categorie", "code_article", "materiel"):
-        df[col] = df[col].fillna("").astype(str).str.strip()
-    df["numero"] = df["numero"].apply(lambda v: str(v).strip() if v is not None else "")
-    df["quantite"] = pd.to_numeric(df["quantite"], errors="coerce").fillna(0).astype(int)
-    df = df[df["materiel"] != ""]
-    # lignes placeholder de l'export maquette, ex. "(aucun équipement rattaché)" :
-    # on garde la pièce (elle existe dans la maquette) mais sans matériel
-    placeholder = df["materiel"].str.match(r"^\(.*\)$")
-    df.loc[placeholder, "materiel"] = ""
-    df.loc[placeholder, "quantite"] = 0
-    return df.reset_index(drop=True)
+    level = _sheet_level(sheet_name, rows)
+    if "niveau" not in positions or frame["niveau"].dropna().astype(str).str.strip().eq("").all():
+        frame["niveau"] = level
+    else:
+        frame["niveau"] = frame["niveau"].fillna(level)
+
+    frame = frame.dropna(subset=["materiel"])
+    for column in ("occupation", "piece", "niveau", "categorie", "code_article", "materiel"):
+        frame[column] = frame[column].fillna("").astype(str).str.strip()
+    frame["numero"] = frame["numero"].apply(lambda value: str(value).strip() if value is not None else "")
+    frame["quantite"] = pd.to_numeric(frame["quantite"], errors="coerce").fillna(0).astype(int)
+    frame = frame[frame["materiel"] != ""]
+
+    placeholder = frame["materiel"].str.match(r"^\(.*\)$")
+    frame.loc[placeholder, "materiel"] = ""
+    frame.loc[placeholder, "quantite"] = 0
+    return frame.reset_index(drop=True)
 
 
 def read_correspondences(path: str) -> tuple[dict, dict]:
@@ -114,8 +155,20 @@ def read_correspondences(path: str) -> tuple[dict, dict]:
     return room_map, material_map
 
 
-def _find_sheet(wb):
-    for name in wb.sheetnames:
-        if "pièce" in name.lower() or "piece" in name.lower():
-            return wb[name]
-    return wb[wb.sheetnames[0]]
+def _candidate_sheets(workbook):
+    for name in workbook.sheetnames:
+        normalized = _norm(name)
+        if normalized in IGNORED_SHEETS or "correspondance" in normalized:
+            continue
+        yield workbook[name]
+
+
+def _sheet_level(sheet_name: str, rows: list[tuple]) -> str:
+    if str(sheet_name or "").strip():
+        return str(sheet_name).strip()
+    for row in rows[:5]:
+        for value in row:
+            text = str(value or "").strip()
+            if text:
+                return text
+    return str(sheet_name).strip()

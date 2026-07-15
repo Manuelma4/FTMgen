@@ -77,6 +77,9 @@ def normalize_corrections(payload: dict[str, Any], previous: dict[str, Any] | No
         "rooms": payload.get("rooms", previous.get("rooms") or []),
         "manual_objects": payload.get("manual_objects", previous.get("manual_objects") or []),
         "edited_objects": payload.get("edited_objects", previous.get("edited_objects") or {}),
+        "room_mappings": payload.get("room_mappings", previous.get("room_mappings") or {}),
+        "material_mappings": payload.get("material_mappings", previous.get("material_mappings") or {}),
+        "validated_articles": payload.get("validated_articles", previous.get("validated_articles") or []),
     }
 
 
