@@ -47,6 +47,16 @@ button:disabled {
   opacity: .55;
 }
 
+button:focus-visible,
+.button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #78b7ff;
+  outline-offset: 2px;
+}
+
 .primary {
   background: #17324d;
   border-color: #17324d;
@@ -67,6 +77,103 @@ button:disabled {
   background: #ffffff14;
   border-color: #ffffff55;
   color: #ffffff;
+}
+
+.auth-page {
+  align-items: center;
+  background:
+    radial-gradient(circle at 15% 15%, #dcecff 0, transparent 34%),
+    radial-gradient(circle at 85% 80%, #dcefe5 0, transparent 32%),
+    #f3f6fa;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.auth-card {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d7e1eb;
+  border-radius: 18px;
+  box-shadow: 0 22px 60px #17324d1c;
+  display: flex;
+  flex-direction: column;
+  max-width: 480px;
+  padding: 42px 38px;
+  text-align: center;
+  width: 100%;
+}
+
+.auth-card h1 {
+  color: #17202a;
+  font-size: 28px;
+  margin: 14px 0 8px;
+}
+
+.auth-card > p:not(.auth-eyebrow) {
+  color: #5a6b7d;
+  line-height: 1.55;
+  margin: 0;
+  max-width: 390px;
+}
+
+.auth-brand {
+  align-items: center;
+  background: linear-gradient(135deg, #17324d, #245f86);
+  border-radius: 14px;
+  box-shadow: 0 10px 24px #17324d2e;
+  color: #ffffff;
+  display: inline-flex;
+  font-size: 18px;
+  font-weight: 900;
+  height: 56px;
+  justify-content: center;
+  letter-spacing: .04em;
+  width: 56px;
+}
+
+.auth-eyebrow {
+  color: #245f86;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .16em;
+  margin: 16px 0 -8px;
+  text-transform: uppercase;
+}
+
+.auth-primary {
+  margin-top: 24px;
+  min-height: 44px;
+  min-width: 180px;
+}
+
+.auth-progress {
+  animation: auth-pulse 1.1s ease-in-out infinite alternate;
+  background: #245f86;
+  border-radius: 999px;
+  display: block;
+  height: 4px;
+  margin-top: 24px;
+  width: 72px;
+}
+
+@keyframes auth-pulse {
+  from {
+    opacity: .3;
+    transform: scaleX(.45);
+  }
+
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-progress {
+    animation: none;
+  }
 }
 
 main {
@@ -97,6 +204,45 @@ main {
 .app-header p {
   color: #c5d0dc;
   margin-top: 2px;
+}
+
+.app-header-actions,
+.app-user {
+  align-items: center;
+  display: flex;
+}
+
+.app-header-actions {
+  gap: 8px;
+}
+
+.app-user {
+  border-right: 1px solid #ffffff33;
+  gap: 8px;
+  margin-right: 4px;
+  max-width: 300px;
+  padding-right: 14px;
+}
+
+.app-user > span {
+  display: grid;
+  min-width: 0;
+}
+
+.app-user strong,
+.app-user small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-user strong {
+  font-size: 13px;
+}
+
+.app-user small {
+  color: #c5d0dc;
+  font-size: 11px;
 }
 
 .muted,
@@ -862,6 +1008,67 @@ th {
   text-align: center;
 }
 
+.word-scope-panel {
+  align-items: end;
+  background: linear-gradient(120deg, #173f66 0%, #24567e 100%);
+  border: 1px solid #173f66;
+  border-radius: 12px;
+  color: #ffffff;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(310px, .85fr) minmax(420px, 1.4fr);
+  padding: 15px 16px;
+}
+
+.word-scope-panel label {
+  color: #ffffff;
+  gap: 7px;
+}
+
+.word-scope-panel label > span {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.word-scope-panel select {
+  background: #ffffff;
+  border-color: #ffffff;
+  color: #17324d;
+  font-weight: 700;
+}
+
+.word-scope-summary {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(100px, 1fr));
+}
+
+.word-scope-summary span {
+  background: #ffffff12;
+  border: 1px solid #ffffff2b;
+  border-radius: 8px;
+  color: #ffffff;
+  display: grid;
+  font-size: 13px;
+  gap: 2px;
+  min-height: 54px;
+  padding: 8px 10px;
+}
+
+.word-scope-summary strong {
+  color: #cfe5f8;
+  font-size: 10px;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+
+.word-scope-help {
+  color: #e1effb;
+  margin: 0 0 9px;
+}
+
 .word-relations-toolbar {
   align-items: center;
   background: linear-gradient(120deg, #f0f7ff 0%, #f7fbff 100%);
@@ -905,6 +1112,22 @@ th {
   margin: 0;
   padding: 3px 8px;
   text-transform: uppercase;
+}
+
+.word-relations-toolbar .manual-count {
+  background: #fff4df;
+  border-color: #f0cf93;
+  color: #8a5a12;
+}
+
+.word-relations-warning {
+  margin: 0;
+  padding: 9px 14px;
+  border: 1px solid #f1d49b;
+  border-top: 0;
+  background: #fff9ed;
+  color: #744d05;
+  font-size: 0.88rem;
 }
 
 .word-relation-actions {
@@ -969,6 +1192,32 @@ th {
   font-weight: 650;
 }
 
+.word-manual-row td {
+  background: #fffdf7;
+}
+
+.ftm-material-table tbody .word-manual-row:hover td {
+  background: #fff8e8;
+}
+
+.word-manual-field {
+  gap: 6px;
+}
+
+.word-manual-field > span {
+  color: #9a6700;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.word-manual-quantity {
+  margin: 0 auto;
+  max-width: 72px;
+  text-align: center;
+}
+
 .word-quantity-cell {
   text-align: center;
 }
@@ -1000,6 +1249,19 @@ th {
 
 .compact-button {
   min-height: 38px;
+}
+
+.compare-panel .table-wrap {
+  max-height: 620px;
+}
+
+.compare-panel table {
+  min-width: 1380px;
+}
+
+.compare-panel td small {
+  color: #9a6700;
+  font-weight: 700;
 }
 
 .component-rules summary {
@@ -1275,6 +1537,11 @@ th {
     flex-direction: column;
   }
 
+  .word-scope-panel {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
   .mappings-grid,
   .component-rule,
   .ftm-options-grid {
@@ -1297,6 +1564,24 @@ th {
     align-items: stretch;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .app-header-actions {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .app-user {
+    border-bottom: 1px solid #ffffff33;
+    border-right: 0;
+    flex-basis: 100%;
+    margin: 0 0 2px;
+    max-width: none;
+    padding: 0 0 10px;
+  }
+
+  .app-header-actions button {
+    flex: 1 1 160px;
   }
 
   .viewer-toolbar > * {
@@ -1335,4 +1620,10 @@ th {
   .material-row {
     grid-template-columns: 1fr;
   }
+
+  .word-scope-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
 }
+

@@ -15,6 +15,8 @@ import unicodedata
 import openpyxl
 import pandas as pd
 
+from ..core.relations import excel_room_id, excel_room_label
+
 COLUMNS = ["occupation", "piece", "numero", "niveau", "categorie", "code_article", "materiel", "quantite"]
 HEADER_FIRST_CELL = "occupation"
 
@@ -119,6 +121,23 @@ def _read_sheet_rows(rows: list[tuple], sheet_name: str) -> pd.DataFrame:
     frame["numero"] = frame["numero"].apply(lambda value: str(value).strip() if value is not None else "")
     frame["quantite"] = pd.to_numeric(frame["quantite"], errors="coerce").fillna(0).astype(int)
     frame = frame[frame["materiel"] != ""]
+
+    # Un nom de pièce n'est pas une identité physique : un même niveau peut
+    # contenir plusieurs « Consultation » appartenant à des occupations/lots
+    # différents.  Ces colonnes suivent chaque ligne matériel afin que le
+    # comparatif ne soit jamais obligé de regrouper par le seul libellé.
+    frame["room_id"] = frame.apply(
+        lambda row: excel_room_id(
+            row.get("niveau"), row.get("occupation"), row.get("piece"), row.get("numero")
+        ),
+        axis=1,
+    )
+    frame["room_label"] = frame.apply(
+        lambda row: excel_room_label(
+            row.get("niveau"), row.get("occupation"), row.get("piece"), row.get("numero")
+        ),
+        axis=1,
+    )
 
     placeholder = frame["materiel"].str.match(r"^\(.*\)$")
     frame.loc[placeholder, "materiel"] = ""

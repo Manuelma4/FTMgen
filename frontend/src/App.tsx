@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent } from 'react';
-import { FileSpreadsheet, FileText, PanelLeftClose, PanelLeftOpen, RefreshCw } from 'lucide-react';
+import { FileSpreadsheet, FileText, LogOut, PanelLeftClose, PanelLeftOpen, RefreshCw, UserRound } from 'lucide-react';
 import {
   deleteAnalysis,
   getAnalysis,
@@ -8,6 +8,7 @@ import {
   inspectExcel,
   listHistory,
   recalculate,
+  redirectToLogout,
   runAnalysis,
   saveDraft,
 } from './api';
@@ -18,14 +19,20 @@ import { ObjectInspector } from './components/ObjectInspector';
 import { PlanViewer } from './components/PlanViewer';
 import type {
   AnalysisSummary,
+  AuthUser,
   Corrections,
   EditedObjectPatch,
+  FtmDocumentData,
   HistoryItem,
   LevelOption,
   ManualObject,
   MarkerResponse,
   TraceItem,
 } from './types';
+
+interface AppProps {
+  currentUser: AuthUser;
+}
 
 function emptyCorrections(): Corrections {
   return {
@@ -35,6 +42,9 @@ function emptyCorrections(): Corrections {
     room_mappings: {},
     material_mappings: {},
     validated_articles: [],
+    object_relations: {},
+    manual_lines: [],
+    excluded_relations: [],
   };
 }
 
@@ -55,10 +65,18 @@ function normalizeAnalysis(data: AnalysisSummary): AnalysisSummary {
       room_mappings: data.corrections?.room_mappings || {},
       material_mappings: data.corrections?.material_mappings || {},
       validated_articles: data.corrections?.validated_articles || [],
+      object_relations: data.corrections?.object_relations || {},
+      manual_lines: data.corrections?.manual_lines || [],
+      excluded_relations: data.corrections?.excluded_relations || [],
     },
     referentiel_excel: {
+      ...(data.referentiel_excel || {}),
       pieces: data.referentiel_excel?.pieces || [],
       materiels: data.referentiel_excel?.materiels || [],
+      piece_options: data.referentiel_excel?.piece_options || [],
+      scope_options: data.referentiel_excel?.scope_options || [],
+      selected_scope_id: data.referentiel_excel?.selected_scope_id || '',
+      selected_scope: data.referentiel_excel?.selected_scope || null,
     },
     pieces_rapprochees: data.pieces_rapprochees || [],
     pieces_non_rapprochees: data.pieces_non_rapprochees || [],
@@ -75,7 +93,12 @@ function uniqueSorted(values: Array<string | undefined | null>): string[] {
   ));
 }
 
-export function App() {
+function isInvalidExcelMaterial(value: string): boolean {
+  const text = String(value || '').trim().toUpperCase();
+  return text.startsWith('#REF') || ['#N/A', '#VALUE!', '#NAME?', '#DIV/0!'].includes(text);
+}
+
+export function App({ currentUser }: AppProps) {
   const [excel, setExcel] = useState<File | null>(null);
   const [pdf, setPdf] = useState<File | null>(null);
   const [levels, setLevels] = useState<LevelOption[]>([]);
@@ -104,6 +127,16 @@ export function App() {
   const referentialReloadRef = useRef<string | null>(null);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+  const userName = currentUser.name
+    || currentUser.preferred_username
+    || currentUser.username
+    || currentUser.email
+    || currentUser.sub;
+  const userIdentifier = currentUser.email && currentUser.email !== userName
+    ? currentUser.email
+    : currentUser.preferred_username && currentUser.preferred_username !== userName
+      ? currentUser.preferred_username
+      : '';
 
   const currentPageType = analysis?.pages[String(page)] || '';
   const selected = useMemo(
@@ -118,8 +151,12 @@ export function App() {
       room_mappings: roomMappings,
       material_mappings: materialMappings,
       validated_articles: validatedArticles,
+      excel_scope_id: analysis?.corrections.excel_scope_id,
+      object_relations: analysis?.corrections.object_relations || {},
+      manual_lines: analysis?.corrections.manual_lines || [],
+      excluded_relations: analysis?.corrections.excluded_relations || [],
     }),
-    [roomCorrections, manualObjects, editedObjects, roomMappings, materialMappings, validatedArticles],
+    [roomCorrections, manualObjects, editedObjects, roomMappings, materialMappings, validatedArticles, analysis?.corrections],
   );
   const selectedPatch = selected
     ? selected.displayKind === 'manual'
@@ -128,19 +165,29 @@ export function App() {
     : undefined;
   const excelPieces = useMemo(() => {
     if (!analysis) return [];
-    return uniqueSorted([
-      ...(analysis.referentiel_excel?.pieces || []),
-      ...(analysis.pieces_rapprochees || []).map((item) => item.maquette),
-      ...analysis.comparatif.filter((row) => row.quantite_avant > 0).map((row) => row.piece.replace(/\s*\[nouvelle pièce\]\s*$/i, '')),
-    ]);
+    const detailed = analysis.referentiel_excel?.piece_options || [];
+    if (detailed.length > 0) return detailed;
+    return uniqueSorted(analysis.referentiel_excel?.pieces || []).map((piece) => ({
+      id: piece,
+      label: piece,
+      niveau: analysis.niveau_excel_selectionne || analysis.niveau || '',
+      occupation: '',
+      piece,
+      numero: '',
+    }));
   }, [analysis]);
   const excelMaterials = useMemo(() => {
     if (!analysis) return [];
-    return uniqueSorted([
-      ...(analysis.referentiel_excel?.materiels || []),
-      ...(analysis.articles_rapproches || []).map((item) => item.maquette),
-      ...analysis.comparatif.filter((row) => row.quantite_avant > 0).map((row) => row.materiel),
-    ]);
+    const referential = uniqueSorted(analysis.referentiel_excel?.materiels || [])
+      .filter((material) => !isInvalidExcelMaterial(material));
+    if (referential.length > 0) return referential;
+    // Compatibilité avec une très ancienne analyse sans référentiel embarqué.
+    // Les propositions restent alors limitées aux vrais matériels « avant ».
+    return uniqueSorted(
+      analysis.comparatif
+        .filter((row) => row.quantite_avant > 0)
+        .map((row) => row.materiel),
+    ).filter((material) => !isInvalidExcelMaterial(material));
   }, [analysis]);
   useEffect(() => {
     void refreshHistory();
@@ -201,39 +248,6 @@ export function App() {
     return { ...corrections, ...overrides };
   }
 
-  function updateRoomMapping(planRoom: string, excelPiece: string): void {
-    setRoomMappings((items) => {
-      const next = { ...items };
-      next[planRoom] = excelPiece;
-      return next;
-    });
-  }
-
-  function updateMaterialMapping(planArticle: string, excelMaterial: string): void {
-    setMaterialMappings((items) => {
-      const next = { ...items };
-      next[planArticle] = excelMaterial;
-      return next;
-    });
-    if (excelMaterial) {
-      setValidatedArticles((items) => items.filter((item) => item !== planArticle));
-    }
-  }
-
-  function toggleValidatedArticle(article: string, checked: boolean): void {
-    setValidatedArticles((items) => {
-      if (checked) return Array.from(new Set([...items, article]));
-      return items.filter((item) => item !== article);
-    });
-    if (checked) {
-      setMaterialMappings((items) => {
-        const next = { ...items };
-        delete next[article];
-        return next;
-      });
-    }
-  }
-
   async function saveCorrectionSet(nextCorrections: Corrections, successMessage: string): Promise<void> {
     if (!analysis) return;
     setStatus('Enregistrement des corrections...');
@@ -249,16 +263,21 @@ export function App() {
     }
   }
 
-  async function recalculateWithCorrections(nextCorrections: Corrections): Promise<void> {
-    if (!analysis) return;
+  async function recalculateWithCorrections(nextCorrections: Corrections, ftmDocument?: FtmDocumentData): Promise<AnalysisSummary | null> {
+    if (!analysis) return null;
     setError('');
     setStatus('Recalcul du comparatif et génération de l’Excel...');
     try {
-      const result = normalizeAnalysis(await recalculate(analysis.job, nextCorrections));
+      const result = normalizeAnalysis(await recalculate(analysis.job, {
+        ...nextCorrections,
+        ...(ftmDocument ? { ftm_document: ftmDocument } : {}),
+      }));
       setAnalysis(result);
       await refreshHistory();
+      return result;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Échec du recalcul');
+      return null;
     } finally {
       setStatus('');
     }
@@ -472,29 +491,11 @@ export function App() {
     }
   }
 
-  async function recalcExcel(): Promise<void> {
-    if (!analysis) return;
-    await recalculateWithCorrections(corrections);
-  }
-
-  async function saveRelationsDraft(): Promise<void> {
-    await saveCorrectionSet(corrections, 'Relations enregistrées. Recalculez pour appliquer le comparatif.');
-  }
-
-  async function applyRelations(): Promise<void> {
-    await recalculateWithCorrections(corrections);
-  }
-
-  async function validateAllUnmatchedArticles(articles: string[]): Promise<void> {
-    if (articles.length === 0) return;
-    const nextValidated = Array.from(new Set([...validatedArticles, ...articles]));
-    setValidatedArticles(nextValidated);
-    await recalculateWithCorrections(buildCorrections({ validated_articles: nextValidated }));
-  }
-
-  function handleFtmGenerated(result: Pick<AnalysisSummary, 'ftm_document' | 'word_download' | 'updated_at'>): void {
-    setAnalysis((current) => current ? { ...current, ...result } : current);
-    void refreshHistory();
+  async function applyFtmDocument(document: FtmDocumentData): Promise<AnalysisSummary | null> {
+    return recalculateWithCorrections({
+      ...corrections,
+      excel_scope_id: document.excel_scope_id || corrections.excel_scope_id,
+    }, document);
   }
 
   const canRun = Boolean(excel && pdf && level);
@@ -547,9 +548,22 @@ export function App() {
           <h1>FTMgen</h1>
           <p>Comparatif PDF / Excel avec corrections traçables</p>
         </div>
-        <button className="ghost" onClick={() => void refreshHistory()}>
-          <RefreshCw size={16} /> Actualiser
-        </button>
+        <div className="app-header-actions">
+          <div className="app-user">
+            <UserRound size={20} aria-hidden="true" />
+            <span>
+              <span className="sr-only">Utilisateur connecté :</span>
+              <strong>{userName}</strong>
+              {userIdentifier && <small>{userIdentifier}</small>}
+            </span>
+          </div>
+          <button type="button" className="ghost" onClick={() => void refreshHistory()}>
+            <RefreshCw size={16} aria-hidden="true" /> Actualiser
+          </button>
+          <button type="button" className="ghost" onClick={redirectToLogout}>
+            <LogOut size={16} aria-hidden="true" /> Se déconnecter
+          </button>
+        </div>
       </header>
 
       <section className={`workspace ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`} style={workspaceStyle}>
@@ -619,9 +633,6 @@ export function App() {
                   <p>{analysis.symboles_detectes} objets · {analysis.lignes} lignes comparées</p>
                 </div>
                 <div className="actions">
-                  <button className="primary" onClick={() => void recalcExcel()}>
-                    Recalculer et refaire l’Excel
-                  </button>
                   {analysis.download && <a className="button" href={analysis.download}>Télécharger Excel</a>}
                   {analysis.word_download && <a className="button" href={analysis.word_download}>Télécharger Word</a>}
                   {analysis.pdf_original && <a className="button" href={analysis.pdf_original} target="_blank" rel="noreferrer">PDF original</a>}
@@ -633,16 +644,7 @@ export function App() {
                 analysis={analysis}
                 excelPieces={excelPieces}
                 excelMaterials={excelMaterials}
-                roomMappings={roomMappings}
-                materialMappings={materialMappings}
-                validatedArticles={validatedArticles}
-                onRoomMappingChange={updateRoomMapping}
-                onMaterialMappingChange={updateMaterialMapping}
-                onValidatedArticleChange={toggleValidatedArticle}
-                onSaveCorrespondences={saveRelationsDraft}
-                onApplyCorrespondences={applyRelations}
-                onValidateArticles={validateAllUnmatchedArticles}
-                onGenerated={handleFtmGenerated}
+                onApplyDocument={applyFtmDocument}
               />
 
               <section className="analysis-grid" ref={gridRef} style={gridStyle}>

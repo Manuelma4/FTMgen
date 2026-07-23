@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Génération du classeur Excel comparatif (avant maquette / après plan)."""
+"""Génération du classeur Excel comparatif (marché / après FTM)."""
 from datetime import datetime
 
 import xlsxwriter
@@ -8,11 +8,15 @@ from .compare import (
     CompareResult, STATUT_AJOUT, STATUT_MODIFIE, STATUT_INCHANGE,
     STATUT_NON_DETECTE, STATUT_A_VALIDER,
 )
+from .relations import object_relation_key
 from ..extract.pdf_reader import PdfExtraction
 
-HEADERS = ["Niveau", "Pièce", "N°", "Catégorie", "Matériel",
-           "Qté avant (maquette)", "Qté après (plan)", "Écart", "Statut",
-           "Pages PDF", "Libellés plan", "Rapprochement"]
+HEADERS = [
+    "Niveau", "Occupation", "Pièce Excel", "N°", "ID pièce Excel",
+    "Pièce source PDF", "Objet source PDF", "Origine", "Catégorie", "Matériel comparé",
+    "Quantité marché", "Quantité après FTM", "Écart", "Statut",
+    "Pages PDF", "Libellés plan", "Rapprochement",
+]
 
 STATUT_COLORS = {
     STATUT_AJOUT: "#C6EFCE",          # vert
@@ -44,12 +48,14 @@ def write_report(path: str, result: CompareResult, pdf: PdfExtraction,
     ws = wb.add_worksheet("Synthèse")
     ws.set_column("A:A", 52)
     ws.set_column("B:B", 30)
-    ws.write(0, 0, "FTMgen — Comparatif travaux modificatifs", f_title)
+    ws.write(0, 0, "FTMgen — Comparatif marché / après FTM", f_title)
     rows = [
         ("Généré le", datetime.now().strftime("%d/%m/%Y %H:%M")),
-        ("Maquette (avant)", excel_name),
-        ("Plan modificatif (après)", pdf_name),
+        ("Marché (Excel)", excel_name),
+        ("Après FTM (plan PDF)", pdf_name),
         ("Niveau sélectionné", result.niveau if result.niveau else "non détecté"),
+        ("Pôle / lot Excel", (result.selected_scope or {}).get("label") or "non sélectionné"),
+        ("ID périmètre Excel", result.excel_scope_id or "—"),
         ("Pièces reconnues sur le plan", len(result.room_matches) + len(result.unmatched_rooms)),
         ("Pièces rapprochées avec la maquette", len(result.room_matches)),
         ("Pièces non rapprochées", ", ".join(result.unmatched_rooms) or "—"),
@@ -74,7 +80,7 @@ def write_report(path: str, result: CompareResult, pdf: PdfExtraction,
     # ---- Comparatif (+ feuilles filtrées) ----
     def write_table(name, data):
         w = wb.add_worksheet(name[:31])
-        widths = [18, 26, 8, 12, 42, 12, 12, 8, 34, 10, 30, 16]
+        widths = [12, 24, 25, 10, 24, 25, 36, 12, 16, 38, 12, 12, 8, 34, 10, 34, 24]
         for c, wd in enumerate(widths):
             w.set_column(c, c, wd)
         for c, h in enumerate(HEADERS):
@@ -82,18 +88,23 @@ def write_report(path: str, result: CompareResult, pdf: PdfExtraction,
         for i, (_, row) in enumerate(data.iterrows(), start=1):
             f_statut = statut_formats.get(row["statut"], f_cell)
             w.write(i, 0, row.get("niveau", ""), f_cell)
-            w.write(i, 1, row["piece"], f_cell)
-            w.write(i, 2, str(row.get("numero", "") or ""), f_num)
-            w.write(i, 3, row["categorie"], f_cell)
-            w.write(i, 4, row["materiel"], f_cell)
-            w.write(i, 5, int(row["quantite_avant"]), f_num)
-            w.write(i, 6, int(row["quantite_apres"]), f_num)
+            w.write(i, 1, row.get("occupation", ""), f_cell)
+            w.write(i, 2, row.get("piece", ""), f_cell)
+            w.write(i, 3, str(row.get("numero", "") or ""), f_num)
+            w.write(i, 4, str(row.get("room_id", "") or ""), f_cell)
+            w.write(i, 5, str(row.get("source_room", "") or ""), f_cell)
+            w.write(i, 6, str(row.get("source_material", "") or ""), f_cell)
+            w.write(i, 7, str(row.get("origin", "") or ""), f_cell)
+            w.write(i, 8, row["categorie"], f_cell)
+            w.write(i, 9, row["materiel"], f_cell)
+            w.write(i, 10, int(row["quantite_avant"]), f_num)
+            w.write(i, 11, int(row["quantite_apres"]), f_num)
             ecart = int(row["ecart"])
-            w.write(i, 7, ecart, f_ecart_pos if ecart >= 0 else f_ecart_neg)
-            w.write(i, 8, row["statut"], f_statut)
-            w.write(i, 9, str(row.get("pages", "") or ""), f_num)
-            w.write(i, 10, str(row.get("labels", "") or ""), f_cell)
-            w.write(i, 11, str(row.get("rapprochement", "") or ""), f_cell)
+            w.write(i, 12, ecart, f_ecart_pos if ecart >= 0 else f_ecart_neg)
+            w.write(i, 13, row["statut"], f_statut)
+            w.write(i, 14, str(row.get("pages", "") or ""), f_num)
+            w.write(i, 15, str(row.get("labels", "") or ""), f_cell)
+            w.write(i, 16, str(row.get("rapprochement", "") or ""), f_cell)
         w.autofilter(0, 0, max(len(data), 1), len(HEADERS) - 1)
         w.freeze_panes(1, 0)
 
@@ -105,15 +116,24 @@ def write_report(path: str, result: CompareResult, pdf: PdfExtraction,
 
     # ---- Traçabilité symboles ----
     ws = wb.add_worksheet("Traçabilité plan")
-    for c, h in enumerate(["Page", "Type de plan", "Source", "Libellé", "Article", "Catégorie",
-                           "Pièce rattachée", "Distance (pt)", "X", "Y"]):
+    trace_headers = [
+        "Page", "Type de plan", "Source", "Libellé", "Article", "Catégorie",
+        "Pièce rattachée", "Distance (pt)", "X", "Y", "Clé relation",
+        "ID pièce Excel", "Matériel comparé", "État relation",
+    ]
+    for c, h in enumerate(trace_headers):
         ws.write(0, c, h, f_head)
     ws.set_column(0, 2, 14)
     ws.set_column(3, 6, 30)
     for i, s in enumerate(pdf.symbols, start=1):
+        mapping_key = object_relation_key(s.room, s.article)
+        effective = result.object_mapping.get(mapping_key) or {}
+        ignored = mapping_key in result.excluded_relations
         ws.write_row(i, 0, [s.page, s.page_type, s.source, s.label, s.article, s.categorie,
-                            s.room, s.room_dist, round(s.x), round(s.y)], f_cell)
-    ws.autofilter(0, 0, max(len(pdf.symbols), 1), 9)
+                            s.room, s.room_dist, round(s.x), round(s.y), mapping_key,
+                            effective.get("room_id", ""), effective.get("material", ""),
+                            "Exclu" if ignored else "Compté"], f_cell)
+    ws.autofilter(0, 0, max(len(pdf.symbols), 1), len(trace_headers) - 1)
     ws.freeze_panes(1, 0)
 
     # ---- Libellés non catalogués (pour enrichir le catalogue) ----

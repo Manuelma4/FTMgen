@@ -5,6 +5,7 @@ Lancement :  .\\.venv\\Scripts\\python.exe -m uvicorn app.main:app --port 8060
 """
 import uuid
 import json
+import hmac
 import re
 import unicodedata
 from io import BytesIO
@@ -13,15 +14,16 @@ from pathlib import Path
 
 import fitz
 import xlsxwriter
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import config, pipeline
-from .core import word_report
+from .core import compare as compare_mod
+from .core import relations, word_report
 from .extract import excel_reader
-from .services import analysis_store
+from .services import analysis_store, auth_service
 
 app = FastAPI(title="FTMgen", description="Comparatif maquette / plan de travaux modificatifs")
 
@@ -30,6 +32,38 @@ FRONTEND_DIST = config.BASE_DIR / "frontend" / "dist"
 
 if (FRONTEND_DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="frontend-assets")
+
+
+def _authenticated_user(request: Request | None) -> auth_service.UserIdentity:
+    try:
+        return auth_service.service.require_user(request)
+    except auth_service.AuthUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except auth_service.AuthenticationRequired as exc:
+        raise HTTPException(401, str(exc), headers={"WWW-Authenticate": "OIDC"}) from exc
+
+
+def _owned_analysis(
+    job: str, request: Request | None
+) -> tuple[dict, auth_service.UserIdentity]:
+    user = _authenticated_user(request)
+    # Compatibilite des appels internes/tests historiques, uniquement dans le
+    # mode local explicite. Les requetes HTTP fournissent toujours Request.
+    if request is None and user.is_local:
+        return json.loads(_analysis_file(job).read_text(encoding="utf-8")), user
+    try:
+        data = analysis_store.read_analysis(
+            job,
+            owner_sub=user.sub,
+            allow_legacy=auth_service.service.can_access_legacy(user),
+        )
+    except analysis_store.InvalidJobId as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except analysis_store.AnalysisNotFound as exc:
+        # Un job appartenant a un autre compte est volontairement indistinguable
+        # d'un identifiant absent.
+        raise HTTPException(404, str(exc)) from exc
+    return data, user
 
 
 @app.get("/")
@@ -41,11 +75,125 @@ def index():
 
 @app.get("/api/health")
 def api_health():
-    return {"status": "ok"}
+    if auth_service.service.mode == "unavailable":
+        return JSONResponse({"status": "error", "auth_mode": "unavailable"}, status_code=503)
+    return {"status": "ok", "auth_mode": auth_service.service.mode}
+
+
+@app.get("/api/auth/me")
+def api_auth_me(request: Request):
+    try:
+        user = auth_service.service.optional_user(request)
+    except auth_service.AuthUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    if user is None:
+        raise HTTPException(401, "Authentification requise", headers={"WWW-Authenticate": "OIDC"})
+    identity = user.snapshot()
+    identity["preferred_username"] = identity.get("username") or ""
+    return identity
+
+
+@app.get("/api/auth/login")
+async def api_auth_login(redirect_after: str = "/"):
+    if auth_service.service.mode == "local":
+        return RedirectResponse(auth_service._safe_redirect_path(redirect_after), status_code=302)
+    try:
+        url, state = await auth_service.service.begin_login(redirect_after)
+    except auth_service.AuthUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Fournisseur OIDC indisponible : {exc}") from exc
+    response = RedirectResponse(url, status_code=302)
+    response.set_cookie(
+        config.FTM_OIDC_STATE_COOKIE_NAME,
+        state,
+        max_age=config.FTM_OIDC_STATE_TTL_SECONDS,
+        httponly=True,
+        secure=config.FTM_SESSION_COOKIE_SECURE,
+        samesite="lax",
+        path="/api/auth/callback",
+    )
+    return response
+
+
+@app.get("/api/auth/callback")
+async def api_auth_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    error_description: str = "",
+):
+    def callback_error(status_code: int, detail: str) -> JSONResponse:
+        response = JSONResponse({"detail": detail}, status_code=status_code)
+        response.delete_cookie(
+            config.FTM_OIDC_STATE_COOKIE_NAME,
+            path="/api/auth/callback",
+            httponly=True,
+            secure=config.FTM_SESSION_COOKIE_SECURE,
+            samesite="lax",
+        )
+        return response
+
+    if error:
+        return callback_error(400, error_description or error)
+    if not code or not state:
+        return callback_error(400, "Retour OIDC incomplet")
+    browser_state = str(request.cookies.get(config.FTM_OIDC_STATE_COOKIE_NAME) or "")
+    if not browser_state or not hmac.compare_digest(browser_state, state):
+        return callback_error(400, "Etat OIDC non lie a ce navigateur")
+    try:
+        opaque_id, _user, redirect_after = await auth_service.service.complete_login(
+            code=code, state=state
+        )
+    except auth_service.AuthUnavailable as exc:
+        return callback_error(503, str(exc))
+    except (auth_service.InvalidOAuthResponse, ValueError) as exc:
+        return callback_error(400, str(exc))
+    except Exception as exc:
+        return callback_error(502, f"Echec de la connexion OIDC : {exc}")
+    response = RedirectResponse(redirect_after, status_code=302)
+    response.delete_cookie(
+        config.FTM_OIDC_STATE_COOKIE_NAME,
+        path="/api/auth/callback",
+        httponly=True,
+        secure=config.FTM_SESSION_COOKIE_SECURE,
+        samesite="lax",
+    )
+    response.set_cookie(
+        config.FTM_SESSION_COOKIE_NAME,
+        opaque_id,
+        max_age=config.FTM_SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=config.FTM_SESSION_COOKIE_SECURE,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.get("/api/auth/logout")
+async def api_auth_logout(request: Request):
+    try:
+        url = await auth_service.service.logout_url(request)
+    except auth_service.AuthUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Echec de la deconnexion OIDC : {exc}") from exc
+    response = RedirectResponse(url or "/", status_code=302)
+    response.delete_cookie(
+        config.FTM_SESSION_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        secure=config.FTM_SESSION_COOKIE_SECURE,
+        samesite="lax",
+    )
+    return response
 
 
 @app.post("/api/excel/inspect")
-async def api_excel_inspect(excel: UploadFile = File(...)):
+async def api_excel_inspect(request: Request, excel: UploadFile = File(...)):
+    _authenticated_user(request)
     if not excel.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Le fichier doit être un Excel (.xlsx)")
     try:
@@ -57,15 +205,19 @@ async def api_excel_inspect(excel: UploadFile = File(...)):
         levels.append({
             "value": str(level), "pieces": int(group["piece"].nunique()),
             "lignes": int(len(group)), "quantite": int(group["quantite"].sum()),
+            "scope_options": relations.excel_scope_options(group),
         })
     return {"niveaux": levels}
 
 
 @app.post("/api/compare")
 async def api_compare(
+    request: Request,
     excel: UploadFile = File(...), pdf: UploadFile = File(...),
     niveau_excel: str = Form(""), nom_niveau: str = Form(""),
+    excel_scope_id: str = Form(""),
 ):
+    user = _authenticated_user(request)
     if not excel.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Le premier fichier doit être un Excel (.xlsx)")
     if not pdf.filename.lower().endswith(".pdf"):
@@ -85,6 +237,7 @@ async def api_compare(
             pipeline.run,
             str(xlsx_path), str(pdf_path), str(out_path),
             niveau_excel=niveau_excel or None, nom_niveau=nom_niveau or None,
+            corrections={"excel_scope_id": excel_scope_id} if excel_scope_id else None,
         )
     except Exception as exc:  # renvoyer l'erreur lisible côté UI
         raise HTTPException(422, f"Échec du traitement : {exc}") from exc
@@ -96,9 +249,8 @@ async def api_compare(
     summary["excel_name"] = Path(excel.filename).name
     summary["pdf_name"] = Path(pdf.filename).name
     summary["pdf_original"] = f"/api/jobs/{job}/pdf"
-    (config.OUTPUT_DIR / f"analysis_{job}.json").write_text(
-        json.dumps(summary, ensure_ascii=False), encoding="utf-8"
-    )
+    analysis_store.attach_owner(summary, user.snapshot())
+    analysis_store.write_analysis(job, summary)
     return JSONResponse(summary)
 
 
@@ -112,13 +264,17 @@ def _analysis_file(job: str) -> Path:
 
 
 @app.get("/api/history")
-def api_history():
-    return {"analyses": analysis_store.list_analyses()}
+def api_history(request: Request):
+    user = _authenticated_user(request)
+    return {"analyses": analysis_store.list_analyses(
+        owner_sub=user.sub,
+        allow_legacy=auth_service.service.can_access_legacy(user),
+    )}
 
 
 @app.get("/api/history/{job}")
-def api_history_detail(job: str):
-    data = json.loads(_analysis_file(job).read_text(encoding="utf-8"))
+def api_history_detail(job: str, request: Request):
+    data, _user = _owned_analysis(job, request)
     data["job"] = job
     data["pdf_original"] = f"/api/jobs/{job}/pdf"
     output = Path(str(data.get("output", "")))
@@ -132,9 +288,14 @@ def api_history_detail(job: str):
 
 
 @app.delete("/api/history/{job}")
-def api_history_delete(job: str):
+def api_history_delete(job: str, request: Request):
+    user = _authenticated_user(request)
     try:
-        removed = analysis_store.delete_analysis(job)
+        removed = analysis_store.delete_analysis(
+            job,
+            owner_sub=user.sub,
+            allow_legacy=auth_service.service.can_access_legacy(user),
+        )
     except analysis_store.InvalidJobId as exc:
         raise HTTPException(400, str(exc)) from exc
     except analysis_store.AnalysisNotFound as exc:
@@ -143,7 +304,16 @@ def api_history_delete(job: str):
 
 
 @app.get("/api/download/{name}")
-def api_download(name: str):
+def api_download(name: str, request: Request):
+    user = _authenticated_user(request)
+    try:
+        analysis_store.analysis_for_output(
+            name,
+            owner_sub=user.sub,
+            allow_legacy=auth_service.service.can_access_legacy(user),
+        )
+    except analysis_store.AnalysisNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
     path = (config.OUTPUT_DIR / name).resolve()
     if path.parent != config.OUTPUT_DIR.resolve() or not path.exists():
         raise HTTPException(404, "Fichier introuvable")
@@ -184,26 +354,135 @@ def _norm_token(value: str) -> str:
 def _enrich_analysis_for_ui(job: str, data: dict) -> None:
     """Ajoute les référentiels manquants aux anciennes analyses sauvegardées."""
     corrections = analysis_store.normalize_corrections(data.get("corrections") or {})
-    data["corrections"] = corrections
+
+    # Migration douce : les versions précédentes sauvegardaient les choix dans
+    # ftm_document, mais laissaient corrections vide. On les réexpose désormais
+    # comme relations objet par objet afin qu'un prochain Apply les utilise.
+    if not corrections.get("object_relations") and (data.get("ftm_document") or {}).get("materials"):
+        corrections = analysis_store.corrections_with_ftm_materials(
+            corrections,
+            corrections,
+            data["ftm_document"]["materials"],
+            None,
+        )
 
     referential = data.get("referentiel_excel") or {}
-    if not referential.get("pieces") or not referential.get("materiels"):
-        try:
-            frame = excel_reader.read_listing(_job_excel(job))
-            level = data.get("niveau_excel_selectionne")
-            if level:
-                selected = frame[frame["niveau"].str.casefold() == str(level).strip().casefold()]
-                if not selected.empty:
-                    frame = selected
-            data["referentiel_excel"] = {
-                "pieces": sorted(str(item) for item in frame["piece"].dropna().unique().tolist() if str(item).strip()),
-                "materiels": sorted(str(item) for item in frame["materiel"].dropna().unique().tolist() if str(item).strip()),
+    try:
+        frame = excel_reader.read_listing(_job_excel(job))
+        level = data.get("niveau_excel_selectionne")
+        if level:
+            selected = frame[frame["niveau"].str.casefold() == str(level).strip().casefold()]
+            if not selected.empty:
+                frame = selected
+        scope_options = relations.excel_scope_options(frame)
+        piece_options = relations.excel_room_options(frame)
+        # Le scope du comparatif calculé est la référence. Les brouillons et le
+        # formulaire Word ne peuvent pas le remplacer lors d'un simple GET.
+        requested_scope = (data.get("audit_excel") or {}).get("scope_selectionne") \
+            or data.get("excel_scope_selectionne") \
+            or corrections.get("excel_scope_id") \
+            or (data.get("ftm_document") or {}).get("excel_scope_id")
+        selected_scope = relations.resolve_excel_scope(requested_scope, scope_options)
+        if selected_scope is None:
+            pdf_rooms = {
+                _norm_token(item.get("room"))
+                for item in (data.get("traceabilite") or [])
+                if isinstance(item, dict) and _norm_token(item.get("room"))
             }
-        except Exception:
-            data["referentiel_excel"] = {
-                "pieces": referential.get("pieces") or [],
-                "materiels": referential.get("materiels") or [],
+            pdf_relation_keys = {
+                str(item.get("mapping_key") or relations.object_relation_key(
+                    item.get("room"), item.get("article") or item.get("original_article")
+                ))
+                for item in (data.get("traceabilite") or [])
+                if isinstance(item, dict)
             }
+            relation_targets = [
+                relation.get("target_room_id")
+                for key, relation in (corrections.get("object_relations") or {}).items()
+                if str(key) in pdf_relation_keys
+                and isinstance(relation, dict)
+                and relation.get("target_room_id")
+            ]
+            relation_targets.extend(
+                target for source, target in (corrections.get("room_mappings") or {}).items()
+                if _norm_token(source) in pdf_rooms and str(target or "").strip()
+            )
+            selected_scope, _method = relations.infer_excel_scope(
+                scope_options,
+                piece_options,
+                relation_targets,
+                [data.get("pdf_name") or "", _job_pdf(job).stem, (data.get("ftm_document") or {}).get("pole") or ""],
+            )
+        if selected_scope:
+            active_frame = relations.filter_excel_scope(frame, selected_scope)
+        elif len(scope_options) > 1:
+            active_frame = frame.iloc[0:0].copy()
+        else:
+            active_frame = frame
+        selected_scope_id = str((selected_scope or {}).get("id") or "")
+        data["referentiel_excel"] = {
+            "pieces": sorted(
+                str(item) for item in active_frame["piece"].dropna().unique().tolist()
+                if str(item).strip()
+            ),
+            "materiels": sorted(
+                str(item) for item in active_frame["materiel"].dropna().unique().tolist()
+                if str(item).strip() and not compare_mod._is_invalid_excel_material(item)
+            ),
+            "piece_options": piece_options,
+            "scope_options": scope_options,
+            "selected_scope_id": selected_scope_id,
+            "selected_scope": selected_scope,
+        }
+        if selected_scope_id:
+            corrections["excel_scope_id"] = selected_scope_id
+            if str(data.get("excel_scope_selectionne") or "") == selected_scope_id:
+                data["excel_scope"] = selected_scope
+        else:
+            corrections["excel_scope_id"] = ""
+        if isinstance(data.get("ftm_document"), dict):
+            # Le formulaire Word ne doit jamais conserver un scope obsolète ou
+            # absent du référentiel Excel actuellement validé.
+            data["ftm_document"]["excel_scope_id"] = selected_scope_id
+    except Exception:
+        safe_scope_options = [
+            dict(item) for item in (referential.get("scope_options") or [])
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        ]
+        safe_scope_ids = {str(item["id"]) for item in safe_scope_options}
+        safe_piece_options = [
+            dict(item) for item in (referential.get("piece_options") or [])
+            if isinstance(item, dict)
+            and bool(safe_scope_ids)
+            and str(item.get("scope_id") or "").strip()
+            and str(item.get("scope_id")) in safe_scope_ids
+        ]
+        requested_safe_scope = str(
+            (data.get("audit_excel") or {}).get("scope_selectionne")
+            or data.get("excel_scope_selectionne")
+            or corrections.get("excel_scope_id")
+            or ""
+        ).strip()
+        if requested_safe_scope not in safe_scope_ids:
+            requested_safe_scope = str(referential.get("selected_scope_id") or "").strip()
+        if requested_safe_scope not in safe_scope_ids:
+            requested_safe_scope = ""
+        selected_safe_scope = next(
+            (item for item in safe_scope_options if str(item["id"]) == requested_safe_scope), None
+        )
+        data["referentiel_excel"] = {
+            # Échec fermé : les anciens catalogues globaux ne sont pas sûrs.
+            "pieces": [],
+            "materiels": [],
+            "piece_options": safe_piece_options,
+            "scope_options": safe_scope_options,
+            "selected_scope_id": requested_safe_scope,
+            "selected_scope": selected_safe_scope,
+        }
+        corrections["excel_scope_id"] = requested_safe_scope
+        if isinstance(data.get("ftm_document"), dict):
+            data["ftm_document"]["excel_scope_id"] = requested_safe_scope
+    data["corrections"] = corrections
 
     if not data.get("articles_rapproches"):
         mapped = {}
@@ -244,11 +523,59 @@ def _enrich_analysis_for_ui(job: str, data: dict) -> None:
         ]
 
 
+def _validated_ftm_scope(analysis: dict, payload: dict) -> str:
+    """Retourne le scope réellement calculé ou refuse une génération divergente."""
+    comparison_scope_id = str(
+        (analysis.get("audit_excel") or {}).get("scope_selectionne") or ""
+    ).strip()
+    scope_options = (analysis.get("referentiel_excel") or {}).get("scope_options") or []
+    valid_scope_ids = {
+        str(item.get("id") or "").strip()
+        for item in scope_options if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    requested_scope_id = str(payload.get("excel_scope_id") or "").strip()
+    if not comparison_scope_id:
+        raise HTTPException(
+            409,
+            "Le comparatif enregistré ne possède pas de pôle/lot calculé. "
+            "Utilisez « Appliquer » pour recalculer Excel avant de générer le Word.",
+        )
+    if comparison_scope_id not in valid_scope_ids:
+        raise HTTPException(
+            422,
+            "Le pôle/lot du comparatif n'existe plus dans le référentiel Excel. "
+            "Recalculez l'analyse avant de générer le Word.",
+        )
+    if requested_scope_id and requested_scope_id not in valid_scope_ids:
+        raise HTTPException(422, "Le pôle/lot demandé n'existe pas dans le référentiel Excel")
+    if requested_scope_id and requested_scope_id != comparison_scope_id:
+        raise HTTPException(
+            409,
+            "Le pôle/lot du Word diffère du comparatif calculé. "
+            "Utilisez « Appliquer » pour recalculer Excel avec ce périmètre.",
+        )
+    return comparison_scope_id
+
+
+def _validate_corrections_document_scope(payload: dict) -> tuple[str, str]:
+    submitted_document = payload.get("ftm_document") if isinstance(payload.get("ftm_document"), dict) else None
+    correction_scope_id = str(payload.get("excel_scope_id") or "").strip()
+    document_scope_id = str((submitted_document or {}).get("excel_scope_id") or "").strip()
+    if correction_scope_id and document_scope_id and correction_scope_id != document_scope_id:
+        raise HTTPException(
+            409,
+            "Le pôle/lot des corrections diffère de celui du document Word. "
+            "Sélectionnez un seul périmètre puis relancez le calcul.",
+        )
+    return correction_scope_id, document_scope_id
+
+
 @app.post("/api/history/{job}/corrections")
-def api_save_corrections(job: str, payload: dict = Body(...)):
+def api_save_corrections(
+    job: str, payload: dict = Body(...), request: Request = None
+):
     """Enregistre les corrections utilisateur et recalcule le comparatif."""
-    analysis_path = _analysis_file(job)
-    previous = json.loads(analysis_path.read_text(encoding="utf-8"))
+    previous, user = _owned_analysis(job, request)
     excel_path = _job_excel(job)
     pdf_path = _job_pdf(job)
     output = Path(str(previous.get("output") or ""))
@@ -257,14 +584,19 @@ def api_save_corrections(job: str, payload: dict = Body(...)):
     elif not output.is_absolute():
         output = config.OUTPUT_DIR / output.name
 
-    corrections = {
-        "rooms": payload.get("rooms") or [],
-        "manual_objects": payload.get("manual_objects") or [],
-        "edited_objects": payload.get("edited_objects") or {},
-        "room_mappings": payload.get("room_mappings") or {},
-        "material_mappings": payload.get("material_mappings") or {},
-        "validated_articles": payload.get("validated_articles") or [],
-    }
+    submitted_document = payload.get("ftm_document") if isinstance(payload.get("ftm_document"), dict) else None
+    _correction_scope_id, document_scope_id = _validate_corrections_document_scope(payload)
+
+    corrections = analysis_store.normalize_corrections(payload, previous.get("corrections") or {})
+    if submitted_document is not None:
+        if document_scope_id:
+            corrections["excel_scope_id"] = document_scope_id
+        corrections = analysis_store.corrections_with_ftm_materials(
+            corrections,
+            previous.get("corrections") or {},
+            [item for item in (submitted_document.get("materials") or []) if isinstance(item, dict)],
+            word_report.all_pdf_relation_keys(previous),
+        )
     try:
         summary = pipeline.run(
             str(excel_path), str(pdf_path), str(output),
@@ -283,50 +615,86 @@ def api_save_corrections(job: str, payload: dict = Body(...)):
     summary["excel_name"] = previous.get("excel_name") or excel_path.name.split("_", 1)[-1]
     summary["pdf_name"] = previous.get("pdf_name") or pdf_path.name.split("_", 1)[-1]
     summary["pdf_original"] = f"/api/jobs/{job}/pdf"
-    if previous.get("ftm_document"):
-        summary["ftm_document"] = previous["ftm_document"]
-    if previous.get("word_output"):
-        word_output = Path(str(previous["word_output"]))
-        summary["word_output"] = str(config.OUTPUT_DIR / word_output.name)
-        if (config.OUTPUT_DIR / word_output.name).exists():
-            summary["word_download"] = f"/api/download/{word_output.name}"
-    analysis_path.write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+    if previous.get("owner_sub"):
+        analysis_store.preserve_owner(summary, previous)
+    else:
+        # Un job historique ne peut être ouvert en production que par le
+        # subject explicitement configuré dans FTM_LEGACY_OWNER_SUB. Sa
+        # première modification le rattache définitivement à ce compte.
+        analysis_store.attach_owner(summary, user.snapshot())
+    ftm_source = submitted_document or previous.get("ftm_document")
+    if isinstance(ftm_source, dict):
+        word_path = config.OUTPUT_DIR / f"FTM_{job}.docx"
+        calculated_scope_id = str(
+            (summary.get("audit_excel") or {}).get("scope_selectionne") or ""
+        ).strip()
+        controlled_payload = {
+            **ftm_source,
+            "excel_scope_id": calculated_scope_id,
+            "materials_version": 3,
+            "materials": word_report.materials_detected_in_pdf(summary, {
+                **ftm_source,
+                "materials_version": 3,
+            }),
+        }
+        try:
+            summary["ftm_document"] = word_report.write_ftm_document(word_path, controlled_payload)
+            summary["word_output"] = str(word_path)
+            summary["word_download"] = f"/api/download/{word_path.name}"
+            summary["corrections"] = analysis_store.corrections_with_ftm_materials(
+                summary.get("corrections") or {},
+                summary.get("corrections") or {},
+                summary["ftm_document"]["materials"],
+                word_report.all_pdf_relation_keys(summary),
+            )
+        except Exception as exc:
+            raise HTTPException(422, f"Comparatif calculé, mais échec de la génération Word : {exc}") from exc
+    analysis_store.write_analysis(job, summary)
     return JSONResponse(summary)
 
 
 @app.post("/api/history/{job}/ftm")
-async def api_generate_ftm_word(job: str, payload: dict = Body(...)):
-    """Enregistre les champs contrôlés par l'utilisateur et génère le Word FTM."""
-    analysis_path = _analysis_file(job)
-    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
-    word_path = config.OUTPUT_DIR / f"FTM_{job}.docx"
-    try:
-        controlled_payload = {
-            **payload,
-            "materials_version": 2,
-            "materials": word_report.materials_detected_in_pdf(analysis, payload),
-        }
-        normalized = await run_in_threadpool(word_report.write_ftm_document, word_path, controlled_payload)
-    except Exception as exc:
-        raise HTTPException(422, f"Échec de la génération Word : {exc}") from exc
+async def api_generate_ftm_word(
+    job: str, payload: dict = Body(...), request: Request = None
+):
+    """Enregistre le formulaire puis recalcule Excel et Word ensemble.
 
-    updated_at = datetime.now().isoformat(timespec="seconds")
-    analysis["ftm_document"] = normalized
-    analysis["word_output"] = str(word_path)
-    analysis["word_download"] = f"/api/download/{word_path.name}"
-    analysis["updated_at"] = updated_at
-    analysis_path.write_text(json.dumps(analysis, ensure_ascii=False), encoding="utf-8")
-    return JSONResponse({
-        "ftm_document": normalized,
-        "word_download": f"/api/download/{word_path.name}",
-        "updated_at": updated_at,
-    })
+    D'anciens clients appelaient cette route après avoir modifié les relations
+    objet/pièce. Générer uniquement le Word conservait alors un comparatif
+    obsolète : les cibles étaient visibles dans le formulaire, mais ``Avant``
+    restait à zéro. La route réutilise désormais exactement le même recalcul
+    atomique que le bouton « Appliquer ».
+    """
+    analysis, _user = _owned_analysis(job, request)
+    _enrich_analysis_for_ui(job, analysis)
+    comparison_scope_id = _validated_ftm_scope(analysis, payload)
+    recalculation_payload = {
+        **(analysis.get("corrections") or {}),
+        "excel_scope_id": comparison_scope_id,
+        "ftm_document": {
+            **payload,
+            "excel_scope_id": comparison_scope_id,
+            "materials_version": 3,
+        },
+    }
+    return await run_in_threadpool(api_save_corrections, job, recalculation_payload, request)
 
 
 @app.post("/api/history/{job}/corrections/draft")
-def api_save_corrections_draft(job: str, payload: dict = Body(...)):
+def api_save_corrections_draft(
+    job: str, request: Request, payload: dict = Body(...)
+):
+    user = _authenticated_user(request)
     try:
-        data = analysis_store.save_corrections_draft(job, payload)
+        data = analysis_store.save_corrections_draft(
+            job,
+            payload,
+            owner_sub=user.sub,
+            allow_legacy=auth_service.service.can_access_legacy(user),
+        )
+        if not data.get("owner_sub"):
+            analysis_store.attach_owner(data, user.snapshot())
+            analysis_store.write_analysis(job, data)
     except analysis_store.InvalidJobId as exc:
         raise HTTPException(400, str(exc)) from exc
     except analysis_store.AnalysisNotFound as exc:
@@ -339,24 +707,26 @@ def api_save_corrections_draft(job: str, payload: dict = Body(...)):
 
 
 @app.get("/api/jobs/{job}/pdf")
-def api_job_pdf(job: str):
+def api_job_pdf(job: str, request: Request):
+    _owned_analysis(job, request)
     path = _job_pdf(job)
     return FileResponse(path, media_type="application/pdf", filename=path.name.split("_", 1)[-1])
 
 
 @app.get("/api/jobs/{job}/pdf/pages/{page_number}.png")
-def api_pdf_page(job: str, page_number: int, x: float | None = None, y: float | None = None,
-                 annotated: bool = True):
+def api_pdf_page(
+    job: str, page_number: int, request: Request,
+    x: float | None = None, y: float | None = None, annotated: bool = True,
+):
     """Apercu PNG d'une page, avec repere rouge optionnel sur la source."""
+    analysis, _user = _owned_analysis(job, request)
     path = _job_pdf(job)
     document = fitz.open(path)
     try:
         if page_number < 1 or page_number > document.page_count:
             raise HTTPException(404, "Page PDF introuvable")
         page = document[page_number - 1]
-        analysis_path = config.OUTPUT_DIR / f"analysis_{job}.json"
-        if annotated and analysis_path.exists():
-            analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+        if annotated:
             for symbol in analysis.get("traceabilite", []):
                 if int(symbol["page"]) != page_number:
                     continue
@@ -377,13 +747,10 @@ def api_pdf_page(job: str, page_number: int, x: float | None = None, y: float | 
 
 
 @app.get("/api/jobs/{job}/pdf/pages/{page_number}/markers")
-def api_pdf_markers(job: str, page_number: int):
+def api_pdf_markers(job: str, page_number: int, request: Request):
     """Coordonnees normalisees pour la couche interactive du plan."""
+    analysis, _user = _owned_analysis(job, request)
     path = _job_pdf(job)
-    analysis_path = config.OUTPUT_DIR / f"analysis_{job}.json"
-    if not analysis_path.exists():
-        raise HTTPException(404, "Analyse introuvable")
-    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
     document = fitz.open(path)
     try:
         if page_number < 1 or page_number > document.page_count:
@@ -410,8 +777,9 @@ def api_pdf_markers(job: str, page_number: int):
 
 
 @app.get("/api/template-excel")
-def api_template_excel():
+def api_template_excel(request: Request):
     """Modele documente pour un import et des correspondances controlables."""
+    _authenticated_user(request)
     stream = BytesIO()
     workbook = xlsxwriter.Workbook(stream, {"in_memory": True})
     header = workbook.add_format({"bold": True, "bg_color": "#17365D", "font_color": "white", "border": 1})
@@ -451,3 +819,4 @@ def api_template_excel():
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="Modele_FTMgen.xlsx"'},
     )
+

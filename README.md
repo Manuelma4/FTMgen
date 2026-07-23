@@ -2,7 +2,7 @@
 
 Application web qui compare la **maquette numérique** (listing Excel « Pièces + Matériel »)
 avec un **plan de travaux modificatifs** (PDF vectoriel) et génère un **Excel comparatif
-avant / après** par pièce, catégorie et matériel. Après l'analyse, l'interface permet
+quantité marché / quantité après FTM** par pièce, catégorie et matériel. Après l'analyse, l'interface permet
 aussi de contrôler les informations contractuelles et de générer une **Fiche de Travaux
 Modificative au format Word**.
 
@@ -17,7 +17,9 @@ Modificative au format Word**.
 | Rapport | XlsxWriter |
 | Fiche FTM Word | python-docx |
 | Rapprochement de noms | cache manuel → exact → fuzzy (difflib) → LLM LIHA (`etc/.env`) |
-| Frontend | page HTML/JS unique (`web/index.html`) — upgradable en React |
+| Frontend | React 19 + TypeScript + Vite (`frontend/src`) |
+| Authentification | OpenID Connect (Keycloak/Moduo), session opaque HttpOnly côté serveur |
+| Persistance | JSON/Word/Excel par analyse + sessions SQLite dans le volume `output/` |
 
 ## Lancer
 
@@ -33,6 +35,8 @@ cd "C:\Projet WEB\FTMgen"
 .\run.cmd            # serveur sur http://127.0.0.1:8060
 ```
 
+Si une ancienne version occupe déjà le port, utiliser `.\run.cmd -Restart`.
+
 Pour choisir un autre port :
 
 ```powershell
@@ -41,20 +45,23 @@ Pour choisir un autre port :
 
 Le terminal doit rester ouvert pendant l'utilisation. Arrêter avec `Ctrl+C`.
 
+En environnement local (`FTM_ENVIRONMENT=local`, valeur par défaut), FTMgen utilise
+un compte local afin de garder le lancement simple. En production, le conteneur force
+`FTM_AUTH_REQUIRED=true` et refuse l'accès si la configuration OIDC est incomplète.
+
 Ouvrir ensuite `http://127.0.0.1:8060`, dÃ©poser le fichier Excel dans la zone
 de gauche et le PDF dans la zone de droite, puis cliquer sur
 Â« GÃ©nÃ©rer le comparatif Â». Le traitement peut prendre quelques secondes.
 
 Une fois l'analyse ouverte, le panneau « Fiche de Travaux Modificative — Word »
-préremplit l'étage et regroupe exclusivement les objets effectivement détectés dans
-le PDF. La table présente pour chacun la quantité avant (Excel) et la quantité après
-(comptage direct du PDF) ; les lignes présentes uniquement dans la maquette sont
-exclues. L'objet, le pôle, le lot, le descriptif, les prix et les options
-administratives restent modifiables avant de cliquer sur « Enregistrer et générer le
-Word ». Les correspondances PDF → Excel se corrigent directement dans cette table :
-« Enregistrer » conserve le brouillon et « Appliquer et refaire l'Excel » relance le
-calcul du comparatif et la génération Excel avec ces choix. Les valeurs non
-renseignées restent vides dans le document.
+regroupe les objets effectivement détectés dans le PDF. Chaque pièce Excel proposée
+affiche son niveau, son occupation, son nom et son numéro afin de distinguer deux
+locaux homonymes. La table présente les colonnes « Quantité marché » et
+« Quantité après FTM » et permet aussi
+d'ajouter des lignes manuelles. « Enregistrer » génère le Word et conserve les choix ;
+« Appliquer et générer Excel + Word » recalcule les deux documents à partir du même
+état. Une ligne supprimée reste exclue après les sauvegardes et peut être restaurée
+avec « Rétablir depuis le PDF ». Les valeurs non renseignées restent vides.
 
 Validation technique avec les fichiers de rÃ©fÃ©rence inclus :
 
@@ -64,16 +71,48 @@ Validation technique avec les fichiers de rÃ©fÃ©rence inclus :
 
 Le classeur contrÃ´lÃ© est crÃ©Ã© dans `output\validation_comparatif.xlsx`.
 
+## Authentification et historique par utilisateur
+
+FTMgen utilise OpenID Connect par discovery ; il n'accède jamais à la base de
+`moduo-auth`. Le navigateur ne reçoit qu'un identifiant de session opaque dans une
+cookie `HttpOnly`, `Secure` et `SameSite=Lax`. Les jetons OIDC restent dans la base
+SQLite du serveur. Chaque nouvelle analyse enregistre le claim stable `sub` de son
+propriétaire ; listes, corrections, PDF, Word, Excel et suppressions sont ensuite
+contrôlés avec ce même identifiant.
+
+Les analyses historiques sans propriétaire restent accessibles uniquement en mode
+local. Pour les rattacher à un compte lors du déploiement, définir explicitement
+`FTM_LEGACY_OWNER_SUB` avec le `sub` OIDC concerné ; leur première modification les
+rattache ensuite définitivement à ce compte.
+
+La création du client Keycloak `ftmgen` est documentée dans
+[`deploy/KEYCLOAK.md`](deploy/KEYCLOAK.md).
+
+## Conteneur et déploiement
+
+Le déploiement cible utilise le nom `FTMgen` et l'URL canonique
+`https://ftm.moduo.fr`. Le conteneur inclut FastAPI et le build React, est publié
+uniquement sur `127.0.0.1:8060` et conserve `output/` dans un volume persistant.
+Apache reste l'unique entrée publique et termine TLS.
+
+Consulter [`deploy/README.md`](deploy/README.md) pour Docker Compose, DNS, Apache,
+Certbot, permissions, sauvegardes et mises à jour. Le dossier local `chat` étant vide,
+ces fichiers suivent les conventions vérifiables de `moduo-auth` et de l'architecture
+MODUO sans prétendre recopier un déploiement inexistant.
+
 ## Format de l'Excel d'entrÃ©e
 
 La feuille principale doit contenir les colonnes `Occupation`, `Nom de la piÃ¨ce`,
 `NumÃ©ro`, `Niveau`, `CatÃ©gorie`, `MatÃ©riel` et `QuantitÃ©`. La colonne
 `Code article` est optionnelle mais fortement recommandÃ©e.
 
-Deux feuilles optionnelles rendent les rapprochements contrÃ´lables :
+Deux feuilles historiques de correspondance restent lisibles pour compatibilité :
 
 - `Correspondance piÃ¨ces` : `PiÃ¨ce plan (PDF)` â†’ `PiÃ¨ce existante (Excel)` ;
 - `Correspondance articles` : `Article plan (PDF)` â†’ `MatÃ©riel existant (Excel)`.
+
+Pour les nouveaux traitements, les correspondances se contrôlent dans la table Word
+de l'interface : elle alimente à la fois le comparatif Excel et le document Word.
 
 Un modÃ¨le complet peut Ãªtre tÃ©lÃ©chargÃ© depuis la page d'accueil ou via
 `http://127.0.0.1:8060/api/template-excel`.
@@ -97,8 +136,11 @@ Ou en ligne de commande, sans serveur :
    composés déployés (POSTE = 4 PC + 1 RJ, règle `expands` du catalogue) ;
    rattachement pièce par distance **géodésique** (les murs noirs bloquent la
    propagation — un symbole dans une alcôve revient bien à sa pièce).
-3. **Comparaison** : clé = (pièce, catégorie, matériel). Les pièces du plan absentes
-   de la maquette sont marquées `[nouvelle pièce]` (créées par les travaux).
+3. **Comparaison** : clé = (identité physique Excel, catégorie, matériel), où
+   l'identité contient niveau + occupation + pièce + numéro. Un nom homonyme n'est
+   jamais agrégé ni choisi automatiquement. Le périmètre « quantité marché » est limité aux
+   pièces contenant réellement un objet PDF ou une relation explicite. Les pièces du
+   plan absentes de la maquette sont marquées `[nouvelle pièce]`.
    Statuts : `AJOUT`, `MODIFIÉ`, `INCHANGÉ`, `NON DÉTECTÉ SUR PLAN (à vérifier)`,
    `À VALIDER (article inconnu de la maquette)`.
 4. **Rapport** : classeur avec onglets Synthèse, Comparatif, Écarts uniquement,

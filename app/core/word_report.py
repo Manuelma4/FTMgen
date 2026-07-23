@@ -15,6 +15,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from .relations import object_relation_key
+
 
 CATEGORY_LABELS = (
     ("architect", "Adaptations demandées par le Maître d’Œuvre"),
@@ -80,10 +82,14 @@ def normalize_ftm_document(payload: dict[str, Any] | None) -> dict[str, Any]:
             )
         row = {
             "id": _clean_text(raw.get("id"), 80),
+            "mapping_key": _clean_text(raw.get("mapping_key"), 500),
+            "origin": "manual" if str(raw.get("origin") or "").lower() == "manual" else "pdf",
             "room": _clean_text(raw.get("room"), 240),
             "material": _clean_text(raw.get("material"), 500),
+            "category": _clean_text(raw.get("category"), 240),
             "comparison_room": _clean_text(raw.get("comparison_room"), 240),
             "comparison_material": _clean_text(raw.get("comparison_material"), 500),
+            "is_addition": bool(raw.get("is_addition", False)),
             "quantity_before": quantity_before,
             "quantity_after": quantity_after,
             "unit_price": _clean_text(raw.get("unit_price"), 40),
@@ -94,6 +100,7 @@ def normalize_ftm_document(payload: dict[str, Any] | None) -> dict[str, Any]:
             materials.append(row)
 
     return {
+        "excel_scope_id": _clean_text(source.get("excel_scope_id"), 80),
         "project_name": _clean_text(source.get("project_name"), 300),
         "project_description": _clean_text(source.get("project_description"), 500),
         "issuer": _clean_text(source.get("issuer"), 120),
@@ -113,7 +120,7 @@ def normalize_ftm_document(payload: dict[str, Any] | None) -> dict[str, Any]:
         "assistant_signatory": _clean_text(source.get("assistant_signatory"), 200),
         "owner_signatory": _clean_text(source.get("owner_signatory"), 200),
         "decision": _clean_text(source.get("decision"), 30).lower(),
-        "materials_version": 2,
+        "materials_version": 3,
         "materials": materials,
     }
 
@@ -144,28 +151,14 @@ def _row_material_keys(row: dict[str, Any]) -> set[str]:
     }
 
 
-def materials_detected_in_pdf(analysis: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, str]]:
-    """Reconstruit/filtre la table Word à partir de la seule traçabilité PDF.
-
-    Les anciens clients, qui n'envoient pas ``materials_version=2``, reçoivent
-    automatiquement la liste PDF complète. Les clients v2 peuvent retirer une
-    ligne, mais jamais en introduire une qui n'existe pas dans la traçabilité.
-    """
-    submitted = [item for item in (payload.get("materials") or []) if isinstance(item, dict)]
-    submitted_by_key: dict[str, dict[str, Any]] = {}
-    for item in submitted:
-        for key in _row_material_keys(item):
-            submitted_by_key[key] = item
-    preserve_selection = payload.get("materials_version") == 2
-
-    room_mappings = {
-        _norm_token(item.get("plan")): _clean_text(item.get("maquette"), 240)
-        for item in (analysis.get("pieces_rapprochees") or [])
-        if isinstance(item, dict) and _clean_text(item.get("plan"), 240)
-    }
+def pdf_material_groups(
+    analysis: dict[str, Any],
+    include_ignored: bool = False,
+) -> list[dict[str, Any]]:
+    """Regroupe la traçabilité PDF sans perdre l'identité de la relation."""
     groups: dict[str, dict[str, Any]] = {}
     for trace in (analysis.get("traceabilite") or []):
-        if not isinstance(trace, dict) or trace.get("ignored"):
+        if not isinstance(trace, dict) or (trace.get("ignored") and not include_ignored):
             continue
         room = _clean_text(trace.get("room"), 240)
         material = _clean_text(
@@ -177,36 +170,78 @@ def materials_detected_in_pdf(analysis: dict[str, Any], payload: dict[str, Any])
         category = _clean_text(trace.get("categorie"), 240)
         if not material:
             continue
-        key = "|".join(_norm_token(value) for value in (room, material, comparison_material, category))
-        if key in groups:
-            groups[key]["quantity_after"] += 1
+        relation_key = object_relation_key(room, material)
+        group_key = "|".join((relation_key, _norm_token(comparison_material), _norm_token(category)))
+        if group_key in groups:
+            groups[group_key]["quantity_after"] += 1
         else:
-            groups[key] = {
+            groups[group_key] = {
+                "mapping_key": relation_key,
+                "origin": "pdf",
                 "room": room,
                 "material": material,
                 "comparison_material": comparison_material,
                 "category": category,
                 "quantity_after": 1,
             }
+    return sorted(groups.values(), key=lambda item: (
+        _norm_token(item["room"]), _norm_token(item["material"]), _norm_token(item["category"]),
+    ))
+
+
+def all_pdf_relation_keys(analysis: dict[str, Any]) -> list[str]:
+    # Les relations masquées restent dans l'univers PDF. Sinon un simple
+    # enregistrement ultérieur oublierait l'exclusion et ferait réapparaître
+    # silencieusement la ligne au prochain recalcul.
+    return sorted({
+        str(item["mapping_key"])
+        for item in pdf_material_groups(analysis, include_ignored=True)
+    })
+
+
+def materials_detected_in_pdf(analysis: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, str]]:
+    """Reconstruit la table Word et conserve aussi les ajouts manuels explicites."""
+    submitted = [item for item in (payload.get("materials") or []) if isinstance(item, dict)]
+    submitted_by_relation = {
+        str(item.get("mapping_key") or object_relation_key(item.get("room"), item.get("material"))): item
+        for item in submitted
+        if str(item.get("origin") or "pdf").lower() != "manual"
+    }
+    submitted_by_key: dict[str, dict[str, Any]] = {}
+    for item in submitted:
+        if str(item.get("origin") or "pdf").lower() == "manual":
+            continue
+        for key in _row_material_keys(item):
+            submitted_by_key[key] = item
+    try:
+        preserve_selection = int(payload.get("materials_version") or 0) >= 2
+    except (TypeError, ValueError):
+        preserve_selection = False
+
+    room_mappings = {
+        _norm_token(item.get("plan")): _clean_text(item.get("room_key") or item.get("maquette"), 240)
+        for item in (analysis.get("pieces_rapprochees") or [])
+        if isinstance(item, dict) and _clean_text(item.get("plan"), 240)
+    }
 
     comparison_rows = [row for row in (analysis.get("comparatif") or []) if isinstance(row, dict)]
     output: list[dict[str, str]] = []
-    ordered_groups = sorted(
-        groups.values(), key=lambda item: (_norm_token(item["room"]), _norm_token(item["material"]))
-    )
-    for index, group in enumerate(ordered_groups, start=1):
+    groups = pdf_material_groups(analysis, include_ignored=preserve_selection)
+    for index, group in enumerate(groups, start=1):
         allowed_keys = _row_material_keys(group)
-        previous = next((submitted_by_key[key] for key in allowed_keys if key in submitted_by_key), None)
+        previous = submitted_by_relation.get(group["mapping_key"]) \
+            or next((submitted_by_key[key] for key in allowed_keys if key in submitted_by_key), None)
         if preserve_selection and previous is None:
             continue
 
         mapped_room = room_mappings.get(_norm_token(group["room"]), "")
         has_selected_room = previous is not None and "comparison_room" in previous
-        has_selected_material = previous is not None and "comparison_material" in previous
+        submitted_material = _clean_text((previous or {}).get("comparison_material"), 500)
+        is_addition = bool((previous or {}).get("is_addition", False))
+        has_selected_material = bool(submitted_material) or is_addition
         selected_room = _clean_text((previous or {}).get("comparison_room"), 240) \
             if has_selected_room else mapped_room
-        selected_material = _clean_text((previous or {}).get("comparison_material"), 500) \
-            if has_selected_material else group["comparison_material"]
+        selected_material = "" if is_addition else (submitted_material or group["comparison_material"])
         candidate_pieces = {_norm_token(selected_room)} - {""}
         if not has_selected_room:
             candidate_pieces.update({
@@ -219,7 +254,8 @@ def materials_detected_in_pdf(analysis: dict[str, Any], payload: dict[str, Any])
             candidate_materials.discard("")
         matching = [
             row for row in comparison_rows
-            if _norm_token(row.get("piece")) in candidate_pieces
+            if (_clean_text(row.get("room_id"), 240) == selected_room
+                or _norm_token(row.get("piece")) in candidate_pieces)
             and _norm_token(row.get("materiel")) in candidate_materials
         ]
         comparison = next(
@@ -228,16 +264,54 @@ def materials_detected_in_pdf(analysis: dict[str, Any], payload: dict[str, Any])
         )
         output.append({
             "id": _clean_text((previous or {}).get("id"), 80) or f"pdf-{index}",
+            "mapping_key": group["mapping_key"],
+            "origin": "pdf",
             "room": group["room"],
             "material": group["material"],
+            "category": group["category"],
             "comparison_room": selected_room,
             "comparison_material": selected_material,
+            "is_addition": is_addition,
             "quantity_before": _quantity_text(comparison.get("quantite_avant")) if comparison else (
                 "0" if has_selected_room or has_selected_material else ""
             ),
             "quantity_after": str(group["quantity_after"]),
             "unit_price": _clean_text((previous or {}).get("unit_price"), 40),
             "company_price": _clean_text((previous or {}).get("company_price"), 40),
+        })
+
+    for index, previous in enumerate(submitted, start=1):
+        if str(previous.get("origin") or "pdf").lower() != "manual":
+            continue
+        room = _clean_text(previous.get("room"), 240)
+        material = _clean_text(previous.get("material"), 500)
+        if not room and not material:
+            continue
+        selected_room = _clean_text(previous.get("comparison_room"), 240)
+        selected_material = _clean_text(previous.get("comparison_material"), 500)
+        is_addition = bool(previous.get("is_addition", not selected_material))
+        if is_addition:
+            selected_material = ""
+        matching = next((
+            row for row in comparison_rows
+            if (_clean_text(row.get("room_id"), 240) == selected_room
+                or _norm_token(row.get("piece")) == _norm_token(selected_room))
+            and _norm_token(row.get("materiel")) == _norm_token(selected_material)
+        ), None)
+        output.append({
+            "id": _clean_text(previous.get("id"), 80) or f"manual-{index}",
+            "mapping_key": _clean_text(previous.get("mapping_key"), 500) or f"manual-{index}",
+            "origin": "manual",
+            "room": room,
+            "material": material,
+            "category": _clean_text(previous.get("category"), 240),
+            "comparison_room": selected_room,
+            "comparison_material": selected_material,
+            "is_addition": is_addition,
+            "quantity_before": _quantity_text(matching.get("quantite_avant")) if matching else "0",
+            "quantity_after": _quantity_text(previous.get("quantity_after")) or "1",
+            "unit_price": _clean_text(previous.get("unit_price"), 40),
+            "company_price": _clean_text(previous.get("company_price"), 40),
         })
     return output
 
@@ -467,7 +541,7 @@ def _add_materials(document: Document, materials: list[dict[str, str]]) -> None:
     _set_table_borders(table)
     widths = (Cm(3.0), Cm(6.0), Cm(2.15), Cm(2.15), Cm(2.35), Cm(3.2))
     headers = (
-        "Nom de la pièce", "Matériel", "Quantité\navant", "Quantité\naprès",
+        "Nom de la pièce", "Matériel", "Quantité marché", "Quantité après FTM",
         "Prix\nunitaire", "Prix\nentreprise",
     )
     header = table.rows[0]

@@ -1,9 +1,14 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
+
+interface SearchableRelationOption {
+  value: string;
+  label: string;
+}
 
 interface SearchableRelationFieldProps {
   value?: string;
   suggested?: string;
-  options: string[];
+  options: Array<string | SearchableRelationOption>;
   placeholder: string;
   specialLabel: string;
   disabled?: boolean;
@@ -31,35 +36,76 @@ export function SearchableRelationField({
   onChange,
 }: SearchableRelationFieldProps) {
   const menuId = useId();
-  const displayValue = value !== undefined ? (value === '' ? specialLabel : value) : suggested;
+  const normalizedOptions = useMemo(() => {
+    const byValue = new Map<string, SearchableRelationOption>();
+    for (const option of options) {
+      const normalized = typeof option === 'string' ? { value: option, label: option } : option;
+      if (normalized.value && !byValue.has(normalized.value)) byValue.set(normalized.value, normalized);
+    }
+    return Array.from(byValue.values());
+  }, [options]);
+  const suggestedOption = normalizedOptions.find((option) => (
+    option.value === suggested || normalizeSearch(option.label) === normalizeSearch(suggested)
+  ));
+  const selectedOption = value === undefined
+    ? suggestedOption
+    : normalizedOptions.find((option) => (
+      option.value === value || normalizeSearch(option.label) === normalizeSearch(value)
+    ));
+  const displayValue = value === '' ? specialLabel : (selectedOption?.label || (value ?? ''));
   const [query, setQuery] = useState(displayValue);
   const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
 
   useEffect(() => {
     if (!open) setQuery(displayValue);
   }, [displayValue, open]);
 
   const search = showAll || query === specialLabel ? '' : query.trim();
-  const normalizedSearch = normalizeSearch(search);
-  const filtered = options
-    .filter((option) => !normalizedSearch || normalizeSearch(option).includes(normalizedSearch))
+  const normalizedQuery = normalizeSearch(search);
+  const filtered = normalizedOptions
+    .filter((option) => !normalizedQuery || normalizeSearch(option.label).includes(normalizedQuery))
     .slice(0, 80);
-  const exact = options.some((option) => normalizeSearch(option) === normalizedSearch);
-  const canAdd = Boolean(search && !exact && normalizeSearch(suggested) !== normalizedSearch);
+  const choices = [
+    { value: '', label: specialLabel, kind: 'special' as const },
+    ...(suggestedOption ? [{ ...suggestedOption, kind: 'suggested' as const }] : []),
+    ...filtered
+      .filter((option) => option.value !== suggestedOption?.value)
+      .map((option) => ({ ...option, kind: 'option' as const })),
+  ];
 
-  function choose(nextValue: string): void {
-    onChange(nextValue);
-    setQuery(nextValue === '' ? specialLabel : nextValue);
-    setOpen(false);
-    setShowAll(false);
+  function findExactOption(nextQuery: string): SearchableRelationOption | undefined {
+    const normalized = normalizeSearch(nextQuery);
+    return normalizedOptions.find((option) => (
+      normalizeSearch(option.label) === normalized || normalizeSearch(option.value) === normalized
+    ));
   }
 
-  function handleChange(nextQuery: string): void {
-    setQuery(nextQuery);
+  function choose(nextValue: string): void {
+    const option = normalizedOptions.find((item) => item.value === nextValue);
+    onChange(nextValue);
+    setQuery(nextValue === '' ? specialLabel : (option?.label || nextValue));
+    setOpen(false);
     setShowAll(false);
-    onChange(nextQuery === specialLabel ? '' : nextQuery);
-    setOpen(true);
+    setActiveIndex(-1);
+  }
+
+  function resetQuery(): void {
+    setQuery(displayValue);
+    setOpen(false);
+    setShowAll(false);
+    setActiveIndex(-1);
+  }
+
+  function commitExactQuery(): void {
+    if (normalizeSearch(query) === normalizeSearch(specialLabel)) {
+      choose('');
+      return;
+    }
+    const exact = findExactOption(query);
+    if (exact) choose(exact.value);
+    else resetQuery();
   }
 
   return (
@@ -70,6 +116,8 @@ export function SearchableRelationField({
           aria-autocomplete="list"
           aria-controls={menuId}
           aria-expanded={open && !disabled}
+          aria-haspopup="listbox"
+          aria-activedescendant={open && activeIndex >= 0 ? `${menuId}-option-${activeIndex}` : undefined}
           role="combobox"
           value={disabled ? '' : query}
           disabled={disabled}
@@ -78,38 +126,55 @@ export function SearchableRelationField({
             event.currentTarget.select();
             setOpen(true);
             setShowAll(true);
+            setActiveIndex(-1);
           }}
-          onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-          onChange={(event) => handleChange(event.target.value)}
+          onBlur={commitExactQuery}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setShowAll(false);
+            setOpen(true);
+            setActiveIndex(-1);
+          }}
           onKeyDown={(event) => {
-            if (event.key === 'Escape') setOpen(false);
+            if (event.key === 'ArrowDown') {
+              event.preventDefault();
+              setOpen(true);
+              setActiveIndex((current) => Math.min(current + 1, choices.length - 1));
+            } else if (event.key === 'ArrowUp') {
+              event.preventDefault();
+              setOpen(true);
+              setActiveIndex((current) => Math.max(current - 1, 0));
+            } else if (event.key === 'Enter') {
+              event.preventDefault();
+              if (open && activeIndex >= 0 && choices[activeIndex]) choose(choices[activeIndex].value);
+              else commitExactQuery();
+            } else if (event.key === 'Escape') {
+              resetQuery();
+            }
           }}
         />
       </div>
       {open && !disabled && (
         <div className="combo-menu" id={menuId} role="listbox">
           <span className="combo-count">
-            {options.length} option{options.length > 1 ? 's' : ''} disponible{options.length > 1 ? 's' : ''}
+            {normalizedOptions.length} option{normalizedOptions.length > 1 ? 's' : ''} disponible{normalizedOptions.length > 1 ? 's' : ''}
           </span>
-          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose('')}>
-            {specialLabel}
-          </button>
-          {suggested && normalizeSearch(suggested) !== normalizeSearch(search) && (
-            <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(suggested)}>
-              Proposition : {suggested}
-            </button>
-          )}
-          {filtered.map((option) => (
-            <button key={option} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(option)}>
-              {option}
+          {choices.map((option, index) => (
+            <button
+              id={`${menuId}-option-${index}`}
+              key={`${option.kind}-${option.value}`}
+              type="button"
+              role="option"
+              aria-selected={activeIndex === index}
+              tabIndex={-1}
+              onMouseEnter={() => setActiveIndex(index)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => choose(option.value)}
+            >
+              {option.kind === 'suggested' ? `Proposition : ${option.label}` : option.label}
             </button>
           ))}
-          {canAdd && (
-            <button type="button" className="combo-add" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(search)}>
-              Ajouter « {search} »
-            </button>
-          )}
-          {filtered.length === 0 && !canAdd && <span>Aucune option ne correspond à la recherche</span>}
+          {filtered.length === 0 && <span>Aucune option ne correspond à la recherche</span>}
         </div>
       )}
     </div>

@@ -1,0 +1,63 @@
+name: ftmgen
+
+services:
+  ftmgen:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ftmgen:latest
+    container_name: ftmgen
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8060:8060"
+    environment:
+      FTM_ENVIRONMENT: ${FTM_ENVIRONMENT:-production}
+      FTM_PUBLIC_URL: ${FTM_PUBLIC_URL:-https://ftm.moduo.fr}
+      FTM_AUTH_REQUIRED: ${FTM_AUTH_REQUIRED:-true}
+      FTM_SESSION_COOKIE_SECURE: ${FTM_SESSION_COOKIE_SECURE:-true}
+      FTM_AUTH_DB_PATH: ${FTM_AUTH_DB_PATH:-/app/output/auth.sqlite3}
+      FTM_LEGACY_OWNER_SUB: ${FTM_LEGACY_OWNER_SUB:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-ftmgen}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-https://ftm.moduo.fr/api/auth/callback}
+      OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:-https://ftm.moduo.fr/}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid profile email}
+      OIDC_HTTP_TIMEOUT_SECONDS: ${OIDC_HTTP_TIMEOUT_SECONDS:-10}
+      FTM_SESSION_COOKIE_NAME: ${FTM_SESSION_COOKIE_NAME:-ftmgen_session}
+      FTM_SESSION_TTL_SECONDS: ${FTM_SESSION_TTL_SECONDS:-28800}
+      FTM_OIDC_STATE_TTL_SECONDS: ${FTM_OIDC_STATE_TTL_SECONDS:-600}
+      FTM_USE_LLM: ${FTM_USE_LLM:-false}
+      FTM_LLM_TIMEOUT: ${FTM_LLM_TIMEOUT:-600}
+      LIHA_CHAT_COMPLETIONS_URL: ${LIHA_CHAT_COMPLETIONS_URL:-}
+      LIHA_CHAT_MODEL: ${LIHA_CHAT_MODEL:-}
+      LIHA_CHAT_TOKEN: ${LIHA_CHAT_TOKEN:-}
+      LIHA_CHAT_TIMEOUT_SECONDS: ${LIHA_CHAT_TIMEOUT_SECONDS:-15}
+    volumes:
+      - type: bind
+        source: /home/mathis/ftmgen-data/output
+        target: /app/output
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8060/api/health', timeout=4).read()"
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    stop_grace_period: 60s

@@ -7,6 +7,34 @@ export interface LevelOption {
   quantite: number;
 }
 
+export interface ExcelPieceOption {
+  id: string;
+  scope_id?: string;
+  label: string;
+  niveau: string;
+  occupation: string;
+  piece: string;
+  numero: string;
+  materiels?: string[];
+  materials?: Array<{
+    name: string;
+    category: string;
+    quantity: number;
+  }>;
+}
+
+export interface ExcelScopeOption {
+  id: string;
+  value?: string;
+  label: string;
+  niveau: string;
+  occupation: string;
+  numero: string;
+  materiels?: string[];
+  pieces?: string[];
+  piece_count?: number;
+}
+
 export interface CatalogueSymbol {
   page_type: string;
   article: string;
@@ -35,6 +63,8 @@ export interface TraceItem {
   left?: number;
   top?: number;
   materiel_compare?: string;
+  mapping_key?: string;
+  room_id?: string;
   statut?: string;
   needs_review?: boolean;
   displayKind?: 'counted' | 'manual' | 'uncatalogued';
@@ -69,6 +99,14 @@ export interface Corrections {
   room_mappings: Record<string, string>;
   material_mappings: Record<string, string>;
   validated_articles: string[];
+  excel_scope_id?: string;
+  object_relations?: Record<string, {
+    target_room_id: string;
+    target_material: string;
+    is_addition?: boolean;
+  }>;
+  manual_lines?: FtmMaterialRow[];
+  excluded_relations?: string[];
 }
 
 export interface CompareRow {
@@ -82,12 +120,21 @@ export interface CompareRow {
   pages: string;
   numero?: string;
   niveau?: string;
+  room_id?: string;
+  occupation?: string;
+  source_room?: string;
+  source_material?: string;
+  origin?: string;
 }
 
 export interface FtmMaterialRow {
   id: string;
   room: string;
   material: string;
+  mapping_key?: string;
+  origin?: 'pdf' | 'manual';
+  category?: string;
+  is_addition?: boolean;
   comparison_room?: string;
   comparison_material?: string;
   quantity_before: string;
@@ -108,6 +155,7 @@ export interface FtmDocumentData {
   pole: string;
   lot: string;
   floor: string;
+  excel_scope_id?: string;
   description: string;
   categories: Record<'architect' | 'owner' | 'program' | 'regulation' | 'technical' | 'other', boolean>;
   category_other: string;
@@ -137,6 +185,7 @@ export interface AnalysisSummary {
   job_status?: string;
   niveau?: string | null;
   niveau_excel_selectionne?: string | null;
+  excel_scope_selectionne?: string | null;
   pages: PageMap;
   pieces_plan: string[];
   pieces_zones: unknown[];
@@ -144,8 +193,21 @@ export interface AnalysisSummary {
   referentiel_excel?: {
     pieces: string[];
     materiels: string[];
+    piece_options?: ExcelPieceOption[];
+    scope_options?: ExcelScopeOption[];
+    selected_scope_id?: string | null;
+    selected_scope?: ExcelScopeOption | null;
   };
-  pieces_rapprochees?: Array<{ plan: string; maquette: string; score: number }>;
+  pieces_rapprochees?: Array<{
+    plan: string;
+    maquette: string;
+    score: number;
+    room_key?: string;
+    label?: string;
+    niveau?: string;
+    occupation?: string;
+    numero?: string;
+  }>;
   pieces_non_rapprochees?: string[];
   articles_rapproches?: Array<{ plan: string; maquette: string; methode: string; score: number }>;
   objets_composes?: Array<{
@@ -172,6 +234,14 @@ export interface HistoryItem {
   job_status?: string;
   symboles_detectes: number;
   lignes: number;
+}
+
+export interface AuthUser {
+  sub: string;
+  name?: string;
+  email?: string;
+  username?: string;
+  preferred_username?: string;
 }
 
 export interface MarkerResponse {

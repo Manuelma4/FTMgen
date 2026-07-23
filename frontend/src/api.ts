@@ -1,12 +1,37 @@
-import type { AnalysisSummary, Corrections, FtmDocumentData, HistoryItem, LevelOption, MarkerResponse } from './types';
+import type { AnalysisSummary, AuthUser, Corrections, FtmDocumentData, HistoryItem, LevelOption, MarkerResponse } from './types';
+
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
 
 async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, init);
+  const response = await fetch(input, {
+    credentials: 'same-origin',
+    ...init,
+  });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body.detail || `HTTP ${response.status}`);
+    throw new ApiError(body.detail || `HTTP ${response.status}`, response.status);
   }
   return body as T;
+}
+
+export function getCurrentUser(signal?: AbortSignal): Promise<AuthUser> {
+  return requestJson<AuthUser>('/api/auth/me', { signal });
+}
+
+export function redirectToLogin(): void {
+  window.location.assign('/api/auth/login');
+}
+
+export function redirectToLogout(): void {
+  window.location.assign('/api/auth/logout');
 }
 
 export async function inspectExcel(file: File): Promise<LevelOption[]> {
@@ -53,7 +78,7 @@ export function saveDraft(job: string, corrections: Corrections): Promise<{ corr
   });
 }
 
-export function recalculate(job: string, corrections: Corrections): Promise<AnalysisSummary> {
+export function recalculate(job: string, corrections: Corrections & { ftm_document?: FtmDocumentData }): Promise<AnalysisSummary> {
   return requestJson(`/api/history/${job}/corrections`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -61,11 +86,7 @@ export function recalculate(job: string, corrections: Corrections): Promise<Anal
   });
 }
 
-export function generateFtmWord(job: string, data: FtmDocumentData): Promise<{
-  ftm_document: FtmDocumentData;
-  word_download: string;
-  updated_at: string;
-}> {
+export function generateFtmWord(job: string, data: FtmDocumentData): Promise<AnalysisSummary> {
   return requestJson(`/api/history/${job}/ftm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

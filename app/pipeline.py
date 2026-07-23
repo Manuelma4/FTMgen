@@ -15,6 +15,7 @@ from pathlib import Path
 from . import config
 from .core import compare as compare_mod
 from .core import report
+from .core import relations
 from .extract import excel_reader, pdf_reader
 from .extract.pdf_reader import Room, Symbol
 
@@ -44,6 +45,11 @@ def run(excel_path: str, pdf_path: str, out_path: str | None = None,
         df, pdf, room_overrides, material_overrides,
         niveau_excel=niveau_excel, nom_niveau=nom_niveau,
         validated_articles=corrections.get("validated_articles") or [],
+        object_relations=corrections.get("object_relations") or {},
+        excluded_relations=corrections.get("excluded_relations") or [],
+        manual_lines=corrections.get("manual_lines") or [],
+        excel_scope_id=corrections.get("excel_scope_id") or None,
+        scope_hint=Path(pdf_path).stem,
     )
     report.write_report(out_path, result, pdf, Path(excel_path).name, Path(pdf_path).name)
 
@@ -61,21 +67,30 @@ def run(excel_path: str, pdf_path: str, out_path: str | None = None,
             article_refs[entry["article"]] = str(entry.get("reference", ""))
     page_markers = {}
     trace_rows = []
-    room_to_piece = {plan: excel for plan, excel, _score in result.room_matches}
     table_status = {}
     if table is not None and not table.empty:
         table_status = {
-            (str(row["piece"]), str(row["materiel"])): str(row["statut"])
+            (str(row.get("room_id") or ""), str(row["materiel"])): str(row["statut"])
             for _, row in table.iterrows()
         }
+    excluded_relations = set(result.excluded_relations)
     for s in pdf.symbols:
         page_markers[s.page] = page_markers.get(s.page, 0) + 1
-        piece = room_to_piece.get(s.room, f"{s.room} [nouvelle pièce]")
-        material = result.material_mapping.get(s.article, (s.article,))[0]
+        mapping_key = relations.object_relation_key(s.room, s.article)
+        effective = result.object_mapping.get(mapping_key) or {}
+        room_id = str(effective.get("room_id") or "")
+        material = str(effective.get("material") or result.material_mapping.get(s.article, (s.article,))[0])
+        ignored = mapping_key in excluded_relations
+        status = "EXCLU PAR L'UTILISATEUR" if ignored else table_status.get(
+            (room_id, material), "COMPTÉ SUR LE PLAN"
+        )
         trace_rows.append({
             "marker": article_refs.get(s.article, "?"),
             "reference": article_refs.get(s.article, "?"),
             "detection_id": s.detection_id or f"p{s.page}-d{page_markers[s.page]}",
+            "mapping_key": mapping_key,
+            "room_id": room_id,
+            "scope_id": str(((effective.get("room") or {}).get("scope_id") or "")),
             "page": int(s.page), "page_type": s.page_type, "source": s.source,
             "label": s.label, "article": s.article, "categorie": s.categorie,
             "original_article": s.original_article or s.article,
@@ -84,8 +99,9 @@ def run(excel_path: str, pdf_path: str, out_path: str | None = None,
             "room": s.room, "room_dist": round(float(s.room_dist), 1),
             "x": round(float(s.x), 1), "y": round(float(s.y), 1),
             "materiel_compare": material,
-            "needs_review": _needs_review_status(table_status.get((piece, material), "")),
-            "statut": table_status.get((piece, material), "COMPTÉ SUR LE PLAN"),
+            "ignored": ignored,
+            "needs_review": False if ignored else _needs_review_status(status),
+            "statut": status,
         })
     uncatalogued_rows = [
         {"page_type": page_type, "label": label, "occurrences": int(count)}
@@ -94,6 +110,8 @@ def run(excel_path: str, pdf_path: str, out_path: str | None = None,
     ]
     detected_by_type = {}
     for symbol in pdf.symbols:
+        if relations.object_relation_key(symbol.room, symbol.article) in excluded_relations:
+            continue
         detected_by_type[(symbol.page_type, symbol.article)] = \
             detected_by_type.get((symbol.page_type, symbol.article), 0) + 1
     catalogue_rows = []
@@ -113,30 +131,76 @@ def run(excel_path: str, pdf_path: str, out_path: str | None = None,
                 "reference": str(entry.get("reference", "?")),
                 "count": detected_by_type.get((page_type, article), 0),
             })
-    excel_scope = _excel_scope(df, niveau_excel)
+    excel_level_scope = _excel_scope(df, niveau_excel)
+    scope_options = result.scope_options or relations.excel_scope_options(excel_level_scope)
+    if result.excel_scope_id:
+        excel_scope = relations.filter_excel_scope(excel_level_scope, result.excel_scope_id)
+    elif len(scope_options) > 1:
+        excel_scope = excel_level_scope.iloc[0:0].copy()
+    else:
+        excel_scope = excel_level_scope
+    # Toutes les pièces du niveau restent décrites avec leur scope_id afin que
+    # l'interface puisse changer de pôle. Le catalogue global exposé ci-dessous
+    # est, lui, strictement limité au scope sélectionné.
+    piece_options = relations.excel_room_options(excel_level_scope)
+    matched_rooms = []
+    for plan_room, detail in result.room_match_details.items():
+        meta = {
+            "niveau": str(detail.get("niveau") or ""),
+            "scope_id": str(detail.get("scope_id") or ""),
+            "occupation": str(detail.get("occupation") or ""),
+            "piece": str(detail.get("piece") or ""),
+            "numero": str(detail.get("numero") or ""),
+        }
+        matched_rooms.append({
+            "plan": plan_room,
+            "maquette": meta["piece"],
+            "score": float(detail.get("score") or 0),
+            "room_key": str(detail.get("id") or ""),
+            "scope_id": meta["scope_id"],
+            "label": str(detail.get("label") or meta["piece"]),
+            "meta": meta,
+        })
+    normalized_corrections = _normalize_corrections(corrections)
+    if result.excel_scope_id:
+        normalized_corrections["excel_scope_id"] = result.excel_scope_id
     return {
         "output": out_path,
         "niveau": result.niveau or None,
         "niveau_excel_selectionne": niveau_excel,
+        "excel_scope_selectionne": result.excel_scope_id or None,
+        "excel_scope": result.selected_scope or None,
         "pages": {str(k): v for k, v in pdf.page_types.items()},
         "pieces_plan": [r.name for r in pdf.rooms],
         "pieces_zones": effective_zones,
-        "corrections": _normalize_corrections(corrections),
+        "corrections": normalized_corrections,
         "referentiel_excel": {
             "pieces": sorted(str(item) for item in excel_scope["piece"].dropna().unique().tolist() if str(item).strip()),
-            "materiels": sorted(str(item) for item in excel_scope["materiel"].dropna().unique().tolist() if str(item).strip()),
+            "materiels": sorted(
+                str(item) for item in excel_scope["materiel"].dropna().unique().tolist()
+                if str(item).strip() and not compare_mod._is_invalid_excel_material(item)
+            ),
+            "piece_options": piece_options,
+            "scope_options": scope_options,
+            "selected_scope_id": result.excel_scope_id or "",
+            "selected_scope": result.selected_scope or None,
         },
-        "pieces_rapprochees": [
-            {"plan": a, "maquette": b, "score": s} for a, b, s in result.room_matches
-        ],
+        "pieces_rapprochees": matched_rooms,
         "pieces_non_rapprochees": result.unmatched_rooms,
         "articles_rapproches": [
             {"plan": article, "maquette": target, "methode": method, "score": score}
             for article, (target, method, score) in sorted(result.material_mapping.items())
         ],
         "objets_composes": _component_rules_for_pdf(pdf, raw_catalog),
-        "symboles_detectes": len(pdf.symbols),
-        "symboles_vision": sum(1 for s in pdf.symbols if s.source == "vision"),
+        "symboles_detectes": sum(
+            1 for symbol in pdf.symbols
+            if relations.object_relation_key(symbol.room, symbol.article) not in excluded_relations
+        ),
+        "symboles_vision": sum(
+            1 for symbol in pdf.symbols
+            if symbol.source == "vision"
+            and relations.object_relation_key(symbol.room, symbol.article) not in excluded_relations
+        ),
         "vision_utilisee": pdf.cv_used,
         "llm_utilise": result.llm_used,
         "statuts": counts,
@@ -150,9 +214,22 @@ def run(excel_path: str, pdf_path: str, out_path: str | None = None,
         "audit_excel": {
             "lignes_materiel": int(len(df)),
             "pieces_uniques": int(df["piece"].nunique()),
+            "pieces_physiques": len(relations.excel_room_options(df)),
+            "scopes_physiques": len(relations.excel_scope_options(df)),
+            "scope_selectionne": result.excel_scope_id or "",
+            "pieces_scope_selectionne": len(relations.excel_room_options(excel_scope)),
             "quantite_totale": int(df["quantite"].sum()),
+            "quantite_scope_selectionne": int(excel_scope["quantite"].sum()),
             "niveaux": sorted(df["niveau"].dropna().unique().tolist()),
             "codes_articles_renseignes": int((df["code_article"] != "").sum()),
+            "references_formule_invalides": int(
+                excel_scope["materiel"].map(compare_mod._is_invalid_excel_material).sum()
+            ),
+            "quantite_references_invalides": int(
+                excel_scope.loc[
+                    excel_scope["materiel"].map(compare_mod._is_invalid_excel_material), "quantite"
+                ].sum()
+            ),
             "correspondances_pieces": len(room_overrides),
             "correspondances_articles": len(material_overrides),
         },
@@ -196,7 +273,17 @@ def _clean_mapping(mapping: dict, keep_empty: bool = False) -> dict[str, str]:
 
 
 def _normalize_corrections(corrections: dict) -> dict:
+    object_relations = {}
+    for key, raw in (corrections.get("object_relations") or {}).items():
+        if not str(key).strip() or not isinstance(raw, dict):
+            continue
+        object_relations[str(key).strip()] = {
+            "target_room_id": str(raw.get("target_room_id") or "").strip(),
+            "target_material": str(raw.get("target_material") or "").strip(),
+            "is_addition": bool(raw.get("is_addition", False)),
+        }
     return {
+        "excel_scope_id": str(corrections.get("excel_scope_id") or "").strip(),
         "rooms": corrections.get("rooms") or [],
         "manual_objects": corrections.get("manual_objects") or [],
         "edited_objects": corrections.get("edited_objects") or {},
@@ -206,6 +293,14 @@ def _normalize_corrections(corrections: dict) -> dict:
             str(item).strip() for item in (corrections.get("validated_articles") or [])
             if str(item or "").strip()
         ],
+        "object_relations": object_relations,
+        "manual_lines": [
+            dict(item) for item in (corrections.get("manual_lines") or []) if isinstance(item, dict)
+        ],
+        "excluded_relations": sorted({
+            str(item).strip() for item in (corrections.get("excluded_relations") or [])
+            if str(item or "").strip()
+        }),
     }
 
 
