@@ -51,7 +51,7 @@ class ExportLabelTests(unittest.TestCase):
         self.assertNotIn("Qté avant (maquette)", headers)
         self.assertNotIn("Qté après (plan)", headers)
 
-    def test_word_uses_market_and_after_ftm_headers(self) -> None:
+    def test_word_uses_new_material_table_headers_and_computes_prix_total(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ftm.docx"
             write_ftm_document(path, {
@@ -61,18 +61,33 @@ class ExportLabelTests(unittest.TestCase):
                     "material": "PC 10/16A 2P+T",
                     "quantity_before": "8",
                     "quantity_after": "6",
+                    "unit_price": "10",
                 }],
             })
             document = Document(path)
 
-        rows = [
-            [" ".join(cell.text.split()) for cell in row.cells]
-            for table in document.tables
-            for row in table.rows
-        ]
-        material_header = next(row for row in rows if "Nom de la pièce" in row and "Matériel" in row)
-        self.assertIn("Quantité marché", material_header)
-        self.assertIn("Quantité après FTM", material_header)
+        material_table = next(
+            table for table in document.tables
+            if " ".join(table.rows[0].cells[0].text.split()) == "Nom de la pièce"
+        )
+        top_header = [" ".join(cell.text.split()) for cell in material_table.rows[0].cells]
+        bottom_header = [" ".join(cell.text.split()) for cell in material_table.rows[1].cells]
+        self.assertIn("Lot", top_header)
+        self.assertIn("Sous lot", top_header)
+        self.assertIn("Prestations", top_header)
+        self.assertIn("Quantité marché", top_header)
+        self.assertIn("Quantité FTM", top_header)
+        self.assertIn("À compléter par l'émetteur", top_header)
+        self.assertIn("Prix unitaire", bottom_header)
+        self.assertIn("Prix total", bottom_header)
+
+        data_row = [" ".join(cell.text.split()) for cell in material_table.rows[3].cells]
+        self.assertEqual(data_row[3], "PC 10/16A 2P+T")
+        self.assertEqual(data_row[7], "60,00 €")
+
+        subtotal_row = [" ".join(cell.text.split()) for cell in material_table.rows[4].cells]
+        self.assertIn("Lot sous-total", subtotal_row)
+        self.assertIn("60,00 € H.T.", subtotal_row)
 
 
 if __name__ == "__main__":

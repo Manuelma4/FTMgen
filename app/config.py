@@ -6,6 +6,8 @@ from dotenv import dotenv_values
 
 BASE_DIR = Path(__file__).resolve().parent.parent          # C:\Projet WEB\FTMgen
 DATA_DIR = BASE_DIR / "app" / "data"
+ASSETS_DIR = BASE_DIR / "app" / "assets"
+MODUO_LOGO_PATH = ASSETS_DIR / "moduo_logo.png"
 OUTPUT_DIR = BASE_DIR / "output"
 UPLOAD_DIR = OUTPUT_DIR / "uploads"
 

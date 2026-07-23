@@ -278,6 +278,8 @@ function suggestedMaterials(
         mapping_key: mappingKey,
         origin: 'pdf',
         room: item.room,
+        lot: '',
+        sous_lot: '',
         material: item.material,
         category: item.category,
         comparison_room: mappedRoom || '',
@@ -286,7 +288,6 @@ function suggestedMaterials(
         quantity_before: comparison ? String(comparison.quantite_avant) : '',
         quantity_after: String(item.quantityAfter),
         unit_price: '',
-        company_price: '',
       };
     });
 }
@@ -504,6 +505,15 @@ export function FtmDocumentPanel({
     return comparison ? String(comparison.quantite_avant) : '0';
   }
 
+  function prixTotal(item: FtmMaterialRow): string {
+    const unitPriceText = String(item.unit_price || '').trim();
+    if (!unitPriceText) return '';
+    const unitPrice = Number(unitPriceText.replace(',', '.'));
+    const quantity = Number(String(item.quantity_after || '').replace(',', '.'));
+    if (!Number.isFinite(unitPrice) || !Number.isFinite(quantity)) return '';
+    return (quantity * unitPrice).toFixed(2);
+  }
+
   function updateField<Key extends keyof FtmDocumentData>(key: Key, value: FtmDocumentData[Key]): void {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -596,6 +606,8 @@ export function FtmDocumentPanel({
         mapping_key: `manual:${id}`,
         origin: 'manual',
         room: '',
+        lot: '',
+        sous_lot: '',
         material: '',
         category: '',
         comparison_room: '',
@@ -604,7 +616,6 @@ export function FtmDocumentPanel({
         quantity_before: '0',
         quantity_after: '1',
         unit_price: '',
-        company_price: '',
       }],
     }));
     setMessage('Ligne manuelle ajoutée. Complétez la pièce, l’objet et la quantité.');
@@ -797,6 +808,7 @@ export function FtmDocumentPanel({
               <tr className="word-table-groups">
                 <th colSpan={2}>Source PDF</th>
                 <th colSpan={2}>Correspondance Excel</th>
+                <th colSpan={2}>Classification</th>
                 <th colSpan={4}>Quantités et prix</th>
                 <th rowSpan={2}><span className="sr-only">Actions</span></th>
               </tr>
@@ -805,10 +817,12 @@ export function FtmDocumentPanel({
                 <th>Objet PDF</th>
                 <th>Pièce Excel</th>
                 <th>Matériel Excel</th>
+                <th>Lot</th>
+                <th>Sous lot</th>
                 <th>Quantité marché</th>
-                <th>Quantité après FTM</th>
+                <th>Quantité FTM</th>
                 <th>Prix unitaire</th>
-                <th>Prix entreprise</th>
+                <th>Prix total</th>
               </tr>
             </thead>
             <tbody>
@@ -873,20 +887,22 @@ export function FtmDocumentPanel({
                       Ajout sans équivalent Excel
                     </label>
                   </td>
+                  <td><input aria-label="Lot" placeholder="Lot" value={item.lot} onChange={(event) => updateMaterialRow(item.id, { lot: event.target.value })} /></td>
+                  <td><input aria-label="Sous lot" placeholder="Sous lot" value={item.sous_lot} onChange={(event) => updateMaterialRow(item.id, { sous_lot: event.target.value })} /></td>
                   <td className="word-quantity-cell"><output className="word-quantity word-quantity-before" aria-label="Quantité marché">{quantityBefore(item)}</output></td>
                   <td className="word-quantity-cell">
                     {item.origin === 'manual' ? (
                       <input
                         className="word-manual-quantity"
-                        aria-label="Quantité après FTM de la ligne manuelle"
+                        aria-label="Quantité FTM de la ligne manuelle"
                         inputMode="numeric"
                         value={item.quantity_after}
                         onChange={(event) => updateMaterialRow(item.id, { quantity_after: event.target.value })}
                       />
-                    ) : <output className="word-quantity word-quantity-after" aria-label="Quantité après FTM">{item.quantity_after}</output>}
+                    ) : <output className="word-quantity word-quantity-after" aria-label="Quantité FTM">{item.quantity_after}</output>}
                   </td>
                   <td><input aria-label="Prix unitaire" inputMode="decimal" value={item.unit_price} onChange={(event) => updateMaterialRow(item.id, { unit_price: event.target.value })} /></td>
-                  <td><input aria-label="Prix entreprise" inputMode="decimal" value={item.company_price} onChange={(event) => updateMaterialRow(item.id, { company_price: event.target.value })} /></td>
+                  <td><output className="word-quantity word-quantity-total" aria-label="Prix total">{prixTotal(item)}</output></td>
                   <td>
                     <button type="button" className="icon-button danger" aria-label={`Supprimer ${item.material || 'la ligne'}`} onClick={() => removeMaterial(item.id)}>
                       <Trash2 size={16} />
@@ -895,7 +911,7 @@ export function FtmDocumentPanel({
                 </tr>
               ))}
               {form.materials.length === 0 && (
-                <tr><td className="empty-table" colSpan={9}>Aucun objet détecté dans le PDF.</td></tr>
+                <tr><td className="empty-table" colSpan={11}>Aucun objet détecté dans le PDF.</td></tr>
               )}
             </tbody>
           </table>

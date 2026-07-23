@@ -143,14 +143,11 @@ Ou en ligne de commande, sans serveur :
    plan absentes de la maquette sont marquées `[nouvelle pièce]`.
    Statuts : `AJOUT`, `MODIFIÉ`, `INCHANGÉ`, `NON DÉTECTÉ SUR PLAN (à vérifier)`,
    `À VALIDER (article inconnu de la maquette)`.
-4. **Rapport** : classeur avec onglets Synthèse, Comparatif, Écarts uniquement,
-   À valider, Traçabilité plan (chaque symbole avec page + coordonnées),
-   Libellés non catalogués.
+4. **Rapport** : classeur avec deux onglets seulement, Synthèse et Comparatif.
 
 ## Fichiers de configuration éditables
 
 - `app/data/symbol_catalog.json` — libellés de symboles reconnus par type de plan.
-  Consulter l'onglet « Libellés non catalogués » du rapport pour l'enrichir.
 - `app/data/material_map_cache.json` — correspondances article plan → matériel
   maquette (rempli par le LLM, **corrigeable à la main** ; `null` = pas d'équivalent).
   C'est l'embryon de la future base d'articles.

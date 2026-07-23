@@ -20,9 +20,6 @@ def validate(path: str) -> tuple[int, int]:
         required = {
             "Synthese",
             "Comparatif",
-            "Ecarts uniquement",
-            "A valider",
-            "Tracabilite plan",
         }
         actual = {_without_accents(name) for name in workbook.sheetnames}
         missing = required - actual

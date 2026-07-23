@@ -8,7 +8,6 @@ from .compare import (
     CompareResult, STATUT_AJOUT, STATUT_MODIFIE, STATUT_INCHANGE,
     STATUT_NON_DETECTE, STATUT_A_VALIDER,
 )
-from .relations import object_relation_key
 from ..extract.pdf_reader import PdfExtraction
 
 HEADERS = [
@@ -77,7 +76,7 @@ def write_report(path: str, result: CompareResult, pdf: PdfExtraction,
             r += 1
             ws.write(r, 0, remark)
 
-    # ---- Comparatif (+ feuilles filtrées) ----
+    # ---- Comparatif ----
     def write_table(name, data):
         w = wb.add_worksheet(name[:31])
         widths = [12, 24, 25, 10, 24, 25, 36, 12, 16, 38, 12, 12, 8, 34, 10, 34, 24]
@@ -110,46 +109,5 @@ def write_report(path: str, result: CompareResult, pdf: PdfExtraction,
 
     if df is not None and not df.empty:
         write_table("Comparatif", df)
-        changes = df[df["statut"] != STATUT_INCHANGE]
-        write_table("Écarts uniquement", changes)
-        write_table("À valider", df[df["statut"].isin([STATUT_A_VALIDER, STATUT_NON_DETECTE])])
-
-    # ---- Traçabilité symboles ----
-    ws = wb.add_worksheet("Traçabilité plan")
-    trace_headers = [
-        "Page", "Type de plan", "Source", "Libellé", "Article", "Catégorie",
-        "Pièce rattachée", "Distance (pt)", "X", "Y", "Clé relation",
-        "ID pièce Excel", "Matériel comparé", "État relation",
-    ]
-    for c, h in enumerate(trace_headers):
-        ws.write(0, c, h, f_head)
-    ws.set_column(0, 2, 14)
-    ws.set_column(3, 6, 30)
-    for i, s in enumerate(pdf.symbols, start=1):
-        mapping_key = object_relation_key(s.room, s.article)
-        effective = result.object_mapping.get(mapping_key) or {}
-        ignored = mapping_key in result.excluded_relations
-        ws.write_row(i, 0, [s.page, s.page_type, s.source, s.label, s.article, s.categorie,
-                            s.room, s.room_dist, round(s.x), round(s.y), mapping_key,
-                            effective.get("room_id", ""), effective.get("material", ""),
-                            "Exclu" if ignored else "Compté"], f_cell)
-    ws.autofilter(0, 0, max(len(pdf.symbols), 1), len(trace_headers) - 1)
-    ws.freeze_panes(1, 0)
-
-    # ---- Libellés non catalogués (pour enrichir le catalogue) ----
-    ws = wb.add_worksheet("Libellés non catalogués")
-    ws.set_column(0, 0, 16)
-    ws.set_column(1, 1, 46)
-    for c, h in enumerate(["Type de plan", "Libellé", "Occurrences"]):
-        ws.write(0, c, h, f_head)
-    r = 1
-    for page_type, labels in result_uncatalogued(pdf).items():
-        for label, n in sorted(labels.items(), key=lambda kv: -kv[1]):
-            ws.write_row(r, 0, [page_type, label, n], f_cell)
-            r += 1
 
     wb.close()
-
-
-def result_uncatalogued(pdf: PdfExtraction) -> dict:
-    return pdf.uncatalogued or {}

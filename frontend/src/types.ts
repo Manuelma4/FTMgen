@@ -130,6 +130,8 @@ export interface CompareRow {
 export interface FtmMaterialRow {
   id: string;
   room: string;
+  lot: string;
+  sous_lot: string;
   material: string;
   mapping_key?: string;
   origin?: 'pdf' | 'manual';
@@ -140,7 +142,6 @@ export interface FtmMaterialRow {
   quantity_before: string;
   quantity_after: string;
   unit_price: string;
-  company_price: string;
   market_quantity?: string;
   additional_quantity?: string;
 }

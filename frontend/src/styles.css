@@ -925,7 +925,7 @@ th {
 }
 
 .ftm-material-table {
-  min-width: 1500px;
+  min-width: 1740px;
   table-layout: fixed;
 }
 
@@ -945,7 +945,12 @@ th {
   width: 315px;
 }
 
-.ftm-material-table thead tr:nth-child(2) th:nth-child(n+5):nth-child(-n+8) {
+.ftm-material-table thead tr:nth-child(2) th:nth-child(5),
+.ftm-material-table thead tr:nth-child(2) th:nth-child(6) {
+  width: 110px;
+}
+
+.ftm-material-table thead tr:nth-child(2) th:nth-child(n+7):nth-child(-n+10) {
   width: 120px;
 }
 
@@ -1245,6 +1250,12 @@ th {
   background: #edf9f2;
   border-color: #bfe3cd;
   color: #157347;
+}
+
+.word-quantity-total {
+  background: #fdf3e7;
+  border-color: #f0d5ac;
+  color: #8a5a11;
 }
 
 .compact-button {

@@ -2,7 +2,7 @@
 """Génération de la fiche de travaux modificative au format Word."""
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 import re
 from typing import Any
@@ -15,6 +15,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from .. import config
 from .relations import object_relation_key
 
 
@@ -85,6 +86,8 @@ def normalize_ftm_document(payload: dict[str, Any] | None) -> dict[str, Any]:
             "mapping_key": _clean_text(raw.get("mapping_key"), 500),
             "origin": "manual" if str(raw.get("origin") or "").lower() == "manual" else "pdf",
             "room": _clean_text(raw.get("room"), 240),
+            "lot": _clean_text(raw.get("lot"), 120),
+            "sous_lot": _clean_text(raw.get("sous_lot"), 120),
             "material": _clean_text(raw.get("material"), 500),
             "category": _clean_text(raw.get("category"), 240),
             "comparison_room": _clean_text(raw.get("comparison_room"), 240),
@@ -93,7 +96,6 @@ def normalize_ftm_document(payload: dict[str, Any] | None) -> dict[str, Any]:
             "quantity_before": quantity_before,
             "quantity_after": quantity_after,
             "unit_price": _clean_text(raw.get("unit_price"), 40),
-            "company_price": _clean_text(raw.get("company_price"), 40),
         }
         # Une ligne totalement vide n'a pas à apparaître dans le document final.
         if row["room"] or row["material"]:
@@ -267,6 +269,8 @@ def materials_detected_in_pdf(analysis: dict[str, Any], payload: dict[str, Any])
             "mapping_key": group["mapping_key"],
             "origin": "pdf",
             "room": group["room"],
+            "lot": _clean_text((previous or {}).get("lot"), 120),
+            "sous_lot": _clean_text((previous or {}).get("sous_lot"), 120),
             "material": group["material"],
             "category": group["category"],
             "comparison_room": selected_room,
@@ -277,7 +281,6 @@ def materials_detected_in_pdf(analysis: dict[str, Any], payload: dict[str, Any])
             ),
             "quantity_after": str(group["quantity_after"]),
             "unit_price": _clean_text((previous or {}).get("unit_price"), 40),
-            "company_price": _clean_text((previous or {}).get("company_price"), 40),
         })
 
     for index, previous in enumerate(submitted, start=1):
@@ -303,6 +306,8 @@ def materials_detected_in_pdf(analysis: dict[str, Any], payload: dict[str, Any])
             "mapping_key": _clean_text(previous.get("mapping_key"), 500) or f"manual-{index}",
             "origin": "manual",
             "room": room,
+            "lot": _clean_text(previous.get("lot"), 120),
+            "sous_lot": _clean_text(previous.get("sous_lot"), 120),
             "material": material,
             "category": _clean_text(previous.get("category"), 240),
             "comparison_room": selected_room,
@@ -311,7 +316,6 @@ def materials_detected_in_pdf(analysis: dict[str, Any], payload: dict[str, Any])
             "quantity_before": _quantity_text(matching.get("quantite_avant")) if matching else "0",
             "quantity_after": _quantity_text(previous.get("quantity_after")) or "1",
             "unit_price": _clean_text(previous.get("unit_price"), 40),
-            "company_price": _clean_text(previous.get("company_price"), 40),
         })
     return output
 
@@ -442,15 +446,25 @@ def _configure_document(document: Document) -> None:
 
 
 def _add_heading_box(document: Document, data: dict[str, Any]) -> None:
-    table = document.add_table(rows=1, cols=1)
+    table = document.add_table(rows=1, cols=2)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
     _set_table_borders(table, color="137333", size="12")
-    cell = table.cell(0, 0)
-    _set_cell_width(cell, Cm(18.85))
-    cell.text = ""
-    _set_cell_margins(cell, top=120, bottom=120)
-    paragraph = cell.paragraphs[0]
+    logo_cell, title_cell = table.rows[0].cells
+
+    _set_cell_width(logo_cell, Cm(3.5))
+    logo_cell.text = ""
+    logo_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    _set_cell_margins(logo_cell, top=60, bottom=60)
+    logo_paragraph = logo_cell.paragraphs[0]
+    logo_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if config.MODUO_LOGO_PATH.exists():
+        logo_paragraph.add_run().add_picture(str(config.MODUO_LOGO_PATH), width=Cm(2.4))
+
+    _set_cell_width(title_cell, Cm(15.35))
+    title_cell.text = ""
+    _set_cell_margins(title_cell, top=120, bottom=120)
+    paragraph = title_cell.paragraphs[0]
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for index, (text, bold, size) in enumerate((
         (data["project_name"], True, 10),
@@ -523,52 +537,162 @@ def _add_general_information(document: Document, data: dict[str, Any]) -> None:
             _set_run(run, size=8)
 
 
+MATERIAL_TABLE_WIDTH = Cm(18.85)
+MATERIAL_COLUMN_WIDTHS = (
+    Cm(2.8), Cm(1.6), Cm(1.6), Cm(4.85), Cm(1.6), Cm(1.6), Cm(2.2), Cm(2.6),
+)
+MATERIAL_HEADERS = (
+    "Nom de la pièce", "Lot", "Sous lot", "Prestations",
+    "Quantité marché", "Quantité FTM", "Prix unitaire", "Prix total",
+)
+TVA_RATE = Decimal("0.10")
+
+
+def _parse_decimal(value: Any) -> Decimal | None:
+    text = str(value or "").strip().replace(" ", "").replace(" ", "").replace(" ", "").replace(",", ".")
+    if not text:
+        return None
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        return None
+
+
+def _format_euro(value: Decimal | None) -> str:
+    if value is None:
+        return ""
+    quantized = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    sign = "-" if quantized < 0 else ""
+    integer_part, _, decimal_part = f"{abs(quantized):.2f}".partition(".")
+    groups = []
+    while len(integer_part) > 3:
+        groups.insert(0, integer_part[-3:])
+        integer_part = integer_part[:-3]
+    groups.insert(0, integer_part)
+    return f"{sign}{' '.join(groups)},{decimal_part} €"
+
+
+def _row_prix_total(material: dict[str, str]) -> Decimal | None:
+    quantity = _parse_decimal(material.get("quantity_after"))
+    unit_price = _parse_decimal(material.get("unit_price"))
+    if quantity is None or unit_price is None:
+        return None
+    return quantity * unit_price
+
+
+def _merge_row_span(cells, start: int, end: int):
+    merged = cells[start]
+    for cell in cells[start + 1:end]:
+        merged = merged.merge(cell)
+    return merged
+
+
+def _add_lot_band(table, lot_label: str) -> None:
+    row = table.add_row()
+    _set_row_cant_split(row)
+    merged = _merge_row_span(row.cells, 0, len(MATERIAL_COLUMN_WIDTHS))
+    _set_cell_width(merged, MATERIAL_TABLE_WIDTH)
+    _set_cell_shading(merged, "D9E1F2")
+    _write_cell(merged, f"LOT — {lot_label}" if lot_label else "LOT — Non défini", bold=True, size=7.5)
+    row.height = Cm(0.55)
+
+
+def _add_lot_subtotal(table, subtotal: Decimal) -> None:
+    tva = (subtotal * TVA_RATE).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    ttc = subtotal + tva
+    left_width = Cm(sum(w.cm for w in MATERIAL_COLUMN_WIDTHS[:6]))
+    right_width = Cm(sum(w.cm for w in MATERIAL_COLUMN_WIDTHS[6:]))
+    for label, amount, suffix in (
+        ("Lot sous-total", subtotal, "H.T."),
+        ("TVA 10%", tva, ""),
+        ("Total TTC", ttc, "TTC"),
+    ):
+        row = table.add_row()
+        _set_row_cant_split(row)
+        cells = row.cells
+        left = _merge_row_span(cells, 0, 6)
+        _set_cell_width(left, left_width)
+        _set_cell_shading(left, "EAF1DD")
+        _write_cell(left, label, bold=True, size=7.5, align=WD_ALIGN_PARAGRAPH.RIGHT)
+
+        right = _merge_row_span(cells, 6, 8)
+        _set_cell_width(right, right_width)
+        _set_cell_shading(right, "EAF1DD")
+        _write_cell(right, f"{_format_euro(amount)} {suffix}".strip(), bold=True, size=7.5,
+                    align=WD_ALIGN_PARAGRAPH.CENTER)
+        row.height = Cm(0.55)
+
+
 def _add_materials(document: Document, materials: list[dict[str, str]]) -> None:
     document.add_paragraph().paragraph_format.space_after = Pt(2)
     title = document.add_table(rows=1, cols=1)
     title.alignment = WD_TABLE_ALIGNMENT.CENTER
     title.autofit = False
     _set_table_borders(title)
-    _set_cell_width(title.cell(0, 0), Cm(18.85))
+    _set_cell_width(title.cell(0, 0), MATERIAL_TABLE_WIDTH)
     _write_cell(
         title.cell(0, 0), "OBJETS IDENTIFIÉS SUR LE PLAN PDF",
         bold=True, size=8, align=WD_ALIGN_PARAGRAPH.CENTER,
     )
 
-    table = document.add_table(rows=1, cols=6)
+    table = document.add_table(rows=2, cols=8)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
     _set_table_borders(table)
-    widths = (Cm(3.0), Cm(6.0), Cm(2.15), Cm(2.15), Cm(2.35), Cm(3.2))
-    headers = (
-        "Nom de la pièce", "Matériel", "Quantité marché", "Quantité après FTM",
-        "Prix\nunitaire", "Prix\nentreprise",
-    )
-    header = table.rows[0]
-    _set_repeat_table_header(header)
-    for cell, width, label in zip(header.cells, widths, headers):
-        _set_cell_width(cell, width)
-        _set_cell_shading(cell, "F2F2F2")
-        _write_cell(cell, label, bold=True, size=7, align=WD_ALIGN_PARAGRAPH.CENTER)
+    for row in table.rows:
+        _set_repeat_table_header(row)
 
-    display_rows = materials or [{key: "" for key in (
-        "room", "material", "quantity_before", "quantity_after", "unit_price", "company_price"
-    )}]
+    top_row, bottom_row = table.rows
+    for index, width in enumerate(MATERIAL_COLUMN_WIDTHS):
+        _set_cell_width(top_row.cells[index], width)
+        _set_cell_width(bottom_row.cells[index], width)
+    for index in range(6):
+        merged = top_row.cells[index].merge(bottom_row.cells[index])
+        _set_cell_shading(merged, "F2F2F2")
+        _write_cell(merged, MATERIAL_HEADERS[index], bold=True, size=7, align=WD_ALIGN_PARAGRAPH.CENTER)
+    price_header = top_row.cells[6].merge(top_row.cells[7])
+    _set_cell_width(price_header, Cm(MATERIAL_COLUMN_WIDTHS[6].cm + MATERIAL_COLUMN_WIDTHS[7].cm))
+    _set_cell_shading(price_header, "F2F2F2")
+    _write_cell(price_header, "À compléter par l'émetteur", bold=True, size=7, align=WD_ALIGN_PARAGRAPH.CENTER)
+    for index in (6, 7):
+        _set_cell_shading(bottom_row.cells[index], "F2F2F2")
+        _write_cell(bottom_row.cells[index], MATERIAL_HEADERS[index], bold=True, size=7,
+                    align=WD_ALIGN_PARAGRAPH.CENTER)
+
+    display_rows = materials or [{}]
+    groups: dict[str, list[dict[str, str]]] = {}
+    order: list[str] = []
     for material in display_rows:
-        row = table.add_row()
-        _set_row_cant_split(row)
-        values = (
-            material.get("room", ""), material.get("material", ""),
-            material.get("quantity_before", ""), material.get("quantity_after", ""),
-            material.get("unit_price", ""), material.get("company_price", ""),
-        )
-        for index, (cell, width, value) in enumerate(zip(row.cells, widths, values)):
-            _set_cell_width(cell, width)
-            _write_cell(
-                cell, value, size=7,
-                align=WD_ALIGN_PARAGRAPH.LEFT if index < 2 else WD_ALIGN_PARAGRAPH.CENTER,
+        lot_key = material.get("lot") or ""
+        if lot_key not in groups:
+            groups[lot_key] = []
+            order.append(lot_key)
+        groups[lot_key].append(material)
+
+    for lot_key in order:
+        _add_lot_band(table, lot_key)
+        subtotal = Decimal("0")
+        for material in groups[lot_key]:
+            prix_total = _row_prix_total(material)
+            if prix_total is not None:
+                subtotal += prix_total
+            row = table.add_row()
+            _set_row_cant_split(row)
+            values = (
+                material.get("room", ""), material.get("lot", ""), material.get("sous_lot", ""),
+                material.get("material", ""), material.get("quantity_before", ""),
+                material.get("quantity_after", ""),
+                _format_euro(_parse_decimal(material.get("unit_price"))),
+                _format_euro(prix_total),
             )
-        row.height = Cm(0.75)
+            for index, (cell, width, value) in enumerate(zip(row.cells, MATERIAL_COLUMN_WIDTHS, values)):
+                _set_cell_width(cell, width)
+                _write_cell(
+                    cell, value, size=7,
+                    align=WD_ALIGN_PARAGRAPH.LEFT if index in (0, 3) else WD_ALIGN_PARAGRAPH.CENTER,
+                )
+            row.height = Cm(0.75)
+        _add_lot_subtotal(table, subtotal)
 
 
 def _add_section_title(document: Document, title: str) -> None:
